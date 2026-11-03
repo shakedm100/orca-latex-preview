@@ -1,0 +1,3 @@
+.orca/
+node_modules/
+tools/codemirror-bundle/package-lock.json

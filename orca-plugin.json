@@ -1,0 +1,125 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json",
+  "manifestVersion": 2,
+  "execution": "trusted-worker",
+  "id": "latex-preview",
+  "name": "LaTeX Preview",
+  "version": "0.3.0",
+  "description": "Adds PDF and Editor | PDF views to .tex files: the compiled document, or the source and the PDF side by side, rebuilt as you type, with source and PDF jumps, autocomplete and an outline.",
+  "author": {
+    "name": "shakedm100",
+    "url": "https://github.com/shakedm100"
+  },
+  "repository": "https://github.com/shakedm100/orca-latex-preview",
+  "homepage": "https://github.com/shakedm100/orca-latex-preview",
+  "license": "MIT",
+  "engines": {
+    "orca": ">=1.4.246"
+  },
+  "pluginApi": 1,
+  "main": "worker/main.mjs",
+  "contributes": {
+    "settings": [
+      {
+        "key": "engine",
+        "title": "TeX engine",
+        "description": "Auto uses a `% !TEX program = ...` comment when present, XeLaTeX when the preamble loads fontspec, unicode-math or polyglossia, and pdfLaTeX otherwise.",
+        "type": "string",
+        "enum": [
+          "auto",
+          "pdflatex",
+          "xelatex",
+          "lualatex"
+        ],
+        "enumLabels": [
+          "Auto",
+          "pdfLaTeX",
+          "XeLaTeX",
+          "LuaLaTeX"
+        ],
+        "default": "auto"
+      },
+      {
+        "key": "useLatexmk",
+        "title": "Use latexmk when installed",
+        "description": "latexmk decides how many passes and when to run BibTeX or Biber. Without it the plugin runs the engine, the bibliography tool and the reruns itself.",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "autoCompile",
+        "title": "Compile as you type",
+        "description": "Rebuild after each pause in typing and whenever a project file changes on disk. Off means only the Recompile button builds.",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "debounceMs",
+        "title": "Delay before compiling (ms)",
+        "description": "How long to wait after the last change before compiling.",
+        "type": "integer",
+        "default": 400,
+        "minimum": 0,
+        "maximum": 10000
+      },
+      {
+        "key": "outDir",
+        "title": "Output folder",
+        "description": "Folder for the PDF and auxiliary files, relative to the main .tex file. Empty keeps them in Orca's cache (~/.cache/orca-latex-preview), so the project stays clean.",
+        "type": "string",
+        "default": "",
+        "placeholder": "build",
+        "maxLength": 200
+      },
+      {
+        "key": "shellEscape",
+        "title": "Allow shell escape",
+        "description": "Pass -shell-escape, which packages such as minted need. It lets the document run commands on your machine, so enable it only for documents you trust.",
+        "type": "boolean",
+        "default": false
+      },
+      {
+        "key": "texBinDir",
+        "title": "Extra TeX bin folder",
+        "description": "Searched before PATH, for a TeX Live that is not on Orca's PATH.",
+        "type": "string",
+        "default": "",
+        "placeholder": "/usr/local/texlive/2026/bin/x86_64-linux",
+        "maxLength": 500
+      }
+    ],
+    "customEditors": [
+      {
+        "id": "split",
+        "title": "Editor | PDF",
+        "extensions": [
+          ".tex"
+        ],
+        "entry": "editor/split.html",
+        "priority": "option",
+        "contentKind": "text"
+      },
+      {
+        "id": "pdf",
+        "title": "PDF",
+        "extensions": [
+          ".tex"
+        ],
+        "entry": "editor/pdf.html",
+        "priority": "option",
+        "contentKind": "text"
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "storage:own"
+    },
+    {
+      "kind": "settings:own"
+    }
+  ]
+}

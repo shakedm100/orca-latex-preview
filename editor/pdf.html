@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LaTeX PDF</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body data-mode="pdf">
+    <div id="app" class="app">
+      <section id="source" class="source" aria-label="LaTeX source"></section>
+      <div id="divider" class="divider" role="separator" aria-orientation="vertical" tabindex="0" title="Drag to resize"></div>
+      <section class="preview" aria-label="PDF preview">
+        <header class="toolbar">
+          <span id="status" class="status" role="status">Starting…</span>
+          <span class="spacer"></span>
+          <span id="words" class="muted" hidden></span>
+          <button id="issuesToggle" class="chip" hidden></button>
+          <button id="outlineToggle" class="icon" title="Outline" aria-label="Outline" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M4 6h16M8 12h12M12 18h8" /></svg></button>
+          <span id="page" class="page-box muted" hidden><input id="pageInput" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" aria-label="Page number" title="Type a page number and press Enter" /><span id="pageCount"></span></span>
+          <button id="zoomOut" class="icon" title="Zoom out (Ctrl+-)" aria-label="Zoom out"><svg viewBox="0 0 24 24"><path d="M5 12h14" /></svg></button>
+          <button id="zoomLabel" class="zoom" title="Fit to width (Ctrl+0)">Fit</button>
+          <button id="zoomIn" class="icon" title="Zoom in (Ctrl+=)" aria-label="Zoom in"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg></button>
+          <button id="download" class="icon" title="Save PDF as…" aria-label="Save PDF" disabled><svg viewBox="0 0 24 24"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14" /></svg></button>
+          <button id="compile" class="primary" title="Recompile (Ctrl+Enter)" disabled><svg viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z" /></svg><span>Recompile</span></button>
+        </header>
+        <div id="outline" class="popover" role="menu" hidden></div>
+        <section id="issues" class="issues" hidden></section>
+        <main id="viewer" class="viewer" tabindex="0">
+          <div id="empty" class="empty"><p class="title">Compiling…</p><p class="muted"></p></div>
+        </main>
+      </section>
+    </div>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
