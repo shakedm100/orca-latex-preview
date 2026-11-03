@@ -60,10 +60,23 @@ it cannot tell, it lists the candidates and asks.
 
 ## Requirements
 
-- Orca 1.4.246 or newer, desktop app.
-- A TeX distribution: TeX Live, MacTeX or MiKTeX, with the packages your documents use. latexmk
-  is recommended (`sudo dnf install texlive-latexmk`, `sudo apt install latexmk`). If Orca
-  cannot find TeX on its PATH, set **Extra TeX bin folder** in the plugin settings.
+- Orca 1.4.246 or newer, desktop app, on Linux, macOS or Windows.
+- A TeX distribution with the packages your documents use. The plugin bundles everything else
+  (the PDF viewer and the editor), so it needs no npm, Python or other runtime. TeX is not
+  bundled: a usable TeX Live is several gigabytes, far past what a plugin can ship.
+
+| System | Install TeX | Notes |
+| --- | --- | --- |
+| Fedora | `sudo dnf install texlive-scheme-medium texlive-latexmk` | Add single packages with `sudo dnf install 'tex(enumitem.sty)'`. |
+| Debian, Ubuntu | `sudo apt install texlive-latex-extra latexmk` | `texlive-full` has everything. |
+| Arch | `sudo pacman -S texlive texlive-latexextra` | |
+| macOS | [MacTeX](https://tug.org/mactex/), or `brew install --cask mactex-no-gui` | Found in `/Library/TeX/texbin` even when Orca starts from the Dock. |
+| Windows | [MiKTeX](https://miktex.org/download) or [TeX Live](https://tug.org/texlive/windows.html) | MiKTeX can install missing packages on first use; turn on "Install missing packages on-the-fly" in its console. latexmk needs Perl, which MiKTeX does not include; without it the plugin runs the engine and BibTeX itself. |
+
+The plugin looks for TeX on Orca's PATH, then in the usual install folders (`/usr/local/texlive`,
+`~/.TinyTeX`, `/Library/TeX/texbin`, `C:\texlive`). If yours is elsewhere, set **Extra TeX bin
+folder** in the plugin settings. Build output goes to the system cache folder
+(`~/.cache`, `~/Library/Caches` or `%LOCALAPPDATA%`), under `orca-latex-preview`.
 
 ## Settings
 

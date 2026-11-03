@@ -7,6 +7,10 @@ import { gunzipSync } from 'node:zlib'
 
 const SP_PER_BP = 65781.76 // scaled points per PostScript point
 
+/** Windows paths are case-insensitive, and TeX may log `c:` where Orca says `C:`. */
+export const samePath = (a, b) =>
+  process.platform === 'win32' ? path.normalize(a).toLowerCase() === path.normalize(b).toLowerCase() : path.normalize(a) === path.normalize(b)
+
 // Record kinds: [ vbox, ( hbox, h void hbox, v void vbox, x current point, k kern, g glue, $ math.
 const RECORD = /^([[(hvxkg$])(\d+),(\d+)(?:,\d+)?:(-?\d+),(-?\d+)(?::(-?\d+)(?:,(-?\d+),(-?\d+))?)?/
 
@@ -117,7 +121,7 @@ export function createSynctex({ synctexPath, rootDir, overlayDir }) {
       const data = await load()
       if (!data) return null
       const target = path.normalize(file)
-      const tags = new Set([...data.files].filter(([, input]) => input === target).map(([tag]) => tag))
+      const tags = new Set([...data.files].filter(([, input]) => samePath(input, target)).map(([tag]) => tag))
       if (tags.size === 0) return null
       // The nearest line at or after the cursor that produced output, else the nearest before.
       let best = null

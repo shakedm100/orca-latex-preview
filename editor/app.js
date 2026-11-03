@@ -228,10 +228,14 @@ function applyState(state) {
   }
 }
 
+/** Paths compare with forward slashes: Windows paths arrive with backslashes. */
+const slashes = (file) => String(file).replace(/\\/g, '/')
+
 function issueTargetsThisFile(issue) {
   if (!app.relToRoot) return false
   if (!issue.file) return app.relToRoot === app.state?.name // an unnamed file is the main one
-  return issue.file.replace(/^\.\//, '') === app.relToRoot || issue.file === app.file
+  const file = slashes(issue.file).replace(/^\.\//, '')
+  return file === app.relToRoot || file === slashes(app.file)
 }
 
 function renderIssues(result) {
@@ -352,8 +356,9 @@ function renderOutline() {
 }
 
 function relToRoot(file) {
-  const rootDir = app.state?.root?.replace(/[\\/][^\\/]*$/, '') ?? ''
-  return file.startsWith(rootDir + '/') ? file.slice(rootDir.length + 1) : file
+  const rootDir = slashes(app.state?.root ?? '').replace(/\/[^/]*$/, '')
+  const path = slashes(file)
+  return rootDir && path.startsWith(`${rootDir}/`) ? path.slice(rootDir.length + 1) : path
 }
 
 function openOutline() {

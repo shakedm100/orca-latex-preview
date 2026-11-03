@@ -12,7 +12,7 @@ import path from 'node:path'
 import { compileDocument, GENERATED } from './compile.mjs'
 import { chooseEngine, resolveRoot, scanTex } from './discover.mjs'
 import { scanProject } from './project.mjs'
-import { createSynctex } from './synctex.mjs'
+import { createSynctex, samePath } from './synctex.mjs'
 import { detectTools } from './tools.mjs'
 
 const CHUNK_BYTES = 600 * 1024 // 800 KiB of base64, inside the 1 MiB answer limit.
@@ -21,7 +21,15 @@ const WAIT_MS = 25_000 // a long poll answers within this, changed or not
 const SESSION_TTL_MS = 90_000 // a session that stops polling (its tab closed) is dropped
 const BUILD_LINGER_MS = 60_000 // keep a build's PDF a while so switching views is instant
 const INDEX_TTL_MS = 20_000
-const CACHE_ROOT = path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'), 'orca-latex-preview')
+// Each OS's own cache folder: %LOCALAPPDATA% on Windows, ~/Library/Caches on macOS, XDG elsewhere.
+const CACHE_ROOT = path.join(
+  process.platform === 'win32'
+    ? process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
+    : process.platform === 'darwin'
+      ? path.join(os.homedir(), 'Library', 'Caches')
+      : process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'),
+  'orca-latex-preview'
+)
 
 const hash = (text) => createHash('sha256').update(text).digest('hex')
 const coded = (code, message) => Object.assign(new Error(message), { code })
@@ -431,7 +439,7 @@ export default async function activate(orca) {
       sessionId: session.id,
       file,
       rel: workspace ? path.relative(workspace.path, file) : path.basename(file),
-      relToRoot: path.relative(path.dirname(root), file),
+      relToRoot: path.relative(path.dirname(root), file).split(path.sep).join('/'),
       state: snapshot(build)
     }
   })
@@ -510,8 +518,8 @@ export default async function activate(orca) {
     if (!hit?.file) return null
     return {
       ...hit,
-      rel: path.relative(session.build.rootDir, hit.file),
-      thisFile: path.normalize(hit.file) === path.normalize(session.file)
+      rel: path.relative(session.build.rootDir, hit.file).split(path.sep).join('/'),
+      thisFile: samePath(hit.file, session.file)
     }
   })
 
