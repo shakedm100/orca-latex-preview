@@ -284,6 +284,7 @@ export default async function activate(orca) {
         root: build.root,
         engine: build.engine,
         tools: toolInfo.tools,
+        tex: toolInfo.tex,
         searchDirs: toolInfo.dirs,
         useLatexmk: await setting('useLatexmk', true),
         outDir: build.outDir,

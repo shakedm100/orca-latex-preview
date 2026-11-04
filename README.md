@@ -61,22 +61,44 @@ it cannot tell, it lists the candidates and asks.
 ## Requirements
 
 - Orca 1.4.246 or newer, desktop app, on Linux, macOS or Windows.
-- A TeX distribution with the packages your documents use. The plugin bundles everything else
-  (the PDF viewer and the editor), so it needs no npm, Python or other runtime. TeX is not
-  bundled: a usable TeX Live is several gigabytes, far past what a plugin can ship.
+- A TeX distribution with the packages your documents use. Everything else (the PDF viewer, the
+  editor) ships with the plugin. TeX does not: a usable TeX Live is several gigabytes.
 
-| System | Install TeX | Notes |
-| --- | --- | --- |
-| Fedora | `sudo dnf install texlive-scheme-medium texlive-latexmk` | Add single packages with `sudo dnf install 'tex(enumitem.sty)'`. |
-| Debian, Ubuntu | `sudo apt install texlive-latex-extra latexmk` | `texlive-full` has everything. |
-| Arch | `sudo pacman -S texlive texlive-latexextra` | |
-| macOS | [MacTeX](https://tug.org/mactex/), or `brew install --cask mactex-no-gui` | Found in `/Library/TeX/texbin` even when Orca starts from the Dock. |
-| Windows | [MiKTeX](https://miktex.org/download) or [TeX Live](https://tug.org/texlive/windows.html) | MiKTeX can install missing packages on first use; turn on "Install missing packages on-the-fly" in its console. latexmk needs Perl, which MiKTeX does not include; without it the plugin runs the engine and BibTeX itself. |
+When something is missing, the view says what, why, and how to install it on this computer, with
+a Copy button for the command; the plugin log (`orca plugin logs`) carries the same as
+`[requirement]` lines. It covers TeX itself, an engine (XeLaTeX, LuaLaTeX), BibTeX and Biber, a
+missing LaTeX package, a missing system font, shell escape for minted, and Pygments, and tells a
+missing package apart from a missing project file.
 
-The plugin looks for TeX on Orca's PATH, then in the usual install folders (`/usr/local/texlive`,
-`~/.TinyTeX`, `/Library/TeX/texbin`, `C:\texlive`). If yours is elsewhere, set **Extra TeX bin
-folder** in the plugin settings. Build output goes to the system cache folder
-(`~/.cache`, `~/Library/Caches` or `%LOCALAPPDATA%`), under `orca-latex-preview`.
+The command follows where your TeX came from, then your system:
+
+| TeX | Adds packages with |
+| --- | --- |
+| MiKTeX (Windows, macOS, Linux) | MiKTeX itself: on-the-fly installs, or `miktex packages install` |
+| TeX Live from tug.org, MacTeX, BasicTeX, TinyTeX | `tlmgr` (with `sudo` when installed for all users) |
+| Homebrew's `texlive` (macOS) | Homebrew (it has every package) |
+| Nix | your TeX Live set (`texlive.withPackages`) |
+| Your Linux distribution's TeX | the system package manager: dnf, apt (with `apt-file`), pacman, zypper, emerge, apk, xbps, eopkg, rpm-ostree on image-based Fedora |
+
+Installing TeX in the first place:
+
+| System | Suggested |
+| --- | --- |
+| Windows | `winget install MiKTeX.MiKTeX`, or the MiKTeX or TeX Live installer |
+| macOS | `brew install --cask mactex-no-gui`, or MacTeX (BasicTeX is smaller) |
+| Fedora, RHEL and relatives | `sudo dnf install texlive-scheme-medium texlive-latexmk` |
+| Fedora Silverblue and other image-based systems | `rpm-ostree install …`, or TinyTeX in your home folder |
+| Debian, Ubuntu, Mint, Pop!_OS | `sudo apt install texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended latexmk` |
+| Arch, Manjaro, EndeavourOS | `sudo pacman -S texlive-basic texlive-latex texlive-latexrecommended texlive-latexextra texlive-fontsrecommended texlive-binextra` |
+| openSUSE | `sudo zypper install texlive-scheme-medium texlive-latexmk` |
+| Gentoo, Alpine, Void, Solus, NixOS | their own packages (the view gives the command) |
+| Any other Linux | TinyTeX, which needs no root |
+
+The plugin finds TeX on Orca's PATH and in the usual install folders even when a desktop
+launcher hides them: `/Library/TeX/texbin` and Homebrew on macOS; MiKTeX's and TeX Live's folders
+on Windows; `/usr/local/texlive`, TinyTeX and Nix profiles on Linux. If yours is elsewhere, set
+**Extra TeX bin folder** in the plugin settings. If Orca runs as a Flatpak or Snap it cannot see
+the system's TeX; the view says so and suggests TinyTeX in your home folder.
 
 ## Settings
 

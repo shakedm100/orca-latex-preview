@@ -172,7 +172,7 @@ export async function compileDocument(options) {
   }
   if (toolError && !missingEngine) issues.unshift({ severity: 'error', file: null, line: null, message: toolError })
   // What must be installed, with the command for this system; listed first among the issues too.
-  const requirements = await findRequirements({ log, steps, missingEngine, tools: options.tools, engine: options.engine, shellEscape: options.shellEscape })
+  const requirements = await findRequirements({ log, steps, missingEngine, tools: options.tools, tex: options.tex, engine: options.engine, shellEscape: options.shellEscape })
   for (const requirement of [...requirements].reverse()) {
     const how = requirement.install[0] ? ` To install: ${requirement.install[0]}` : ''
     issues.unshift({ severity: 'error', file: null, line: null, message: `${requirement.title}.${how}`, requirement: requirement.key })

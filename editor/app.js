@@ -253,6 +253,8 @@ function copyText(text) {
   return ok
 }
 
+const COMMAND_LINE = /^(sudo|rpm-ostree|dnf|apt|apt-file|pacman|zypper|emerge|e-file|apk|xbps-install|eopkg|nix-env|brew|port|winget|choco|scoop|tlmgr|miktex|mpm|py|python3?|pip3?|wget|curl|fc-list|fc-cache)\b/
+
 /** What must be installed before the document can build, with the command for this system. */
 function renderRequirements(result) {
   const list = result?.requirements ?? []
@@ -269,18 +271,20 @@ function renderRequirements(result) {
     detail.className = 'detail'
     detail.textContent = requirement.detail
     item.append(title, detail)
-    for (const command of requirement.install) {
+    for (const line of requirement.install) {
       const row = document.createElement('div')
       row.className = 'command'
       const code = document.createElement('code')
-      code.textContent = command
+      code.textContent = line
       row.append(code)
-      // Commands get a copy button; prose (a download link, a console step) does not.
-      if (/^(sudo |brew |pip |tlmgr |fc-list|apt-file |pacman |miktex )/.test(command)) {
+      // Lines that are commands get a copy button (without an "or:" lead-in or a # comment);
+      // prose such as a download link or a step in a settings window does not.
+      const command = line.replace(/^or:?\s+/, '').replace(/\s+#.*$/, '')
+      if (COMMAND_LINE.test(command)) {
         const copy = document.createElement('button')
         copy.textContent = 'Copy'
         copy.addEventListener('click', () => {
-          copy.textContent = copyText(command.replace(/\s+#.*$/, '')) ? 'Copied' : 'Copy failed'
+          copy.textContent = copyText(command) ? 'Copied' : 'Copy failed'
           setTimeout(() => (copy.textContent = 'Copy'), 1500)
         })
         row.append(copy)
