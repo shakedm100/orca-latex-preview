@@ -1,3 +1,4 @@
+window.__pluginStarted = true
 // The PDF and Editor | PDF views of a .tex file. Orca owns the buffer; this frame reads it with
 // orca.document.session(), edits it in the split view, and sends its text to the plugin worker,
 // which compiles it (unsaved edits included) and returns the PDF.
@@ -11,6 +12,7 @@ const els = {
   status: $('status'),
   issuesToggle: $('issuesToggle'),
   issues: $('issues'),
+  requirements: $('requirements'),
   page: $('page'),
   zoomOut: $('zoomOut'),
   zoomIn: $('zoomIn'),
@@ -238,7 +240,63 @@ function issueTargetsThisFile(issue) {
   return file === app.relToRoot || file === slashes(app.file)
 }
 
+/** Frames have no clipboard permission; a copy inside the click still works. */
+function copyText(text) {
+  const area = document.createElement('textarea')
+  area.value = text
+  area.style.position = 'fixed'
+  area.style.opacity = '0'
+  document.body.append(area)
+  area.select()
+  const ok = document.execCommand('copy')
+  area.remove()
+  return ok
+}
+
+/** What must be installed before the document can build, with the command for this system. */
+function renderRequirements(result) {
+  const list = result?.requirements ?? []
+  const box = els.requirements
+  box.replaceChildren()
+  box.hidden = list.length === 0
+  for (const requirement of list) {
+    const item = document.createElement('div')
+    item.className = 'requirement'
+    const title = document.createElement('div')
+    title.className = 'title'
+    title.textContent = requirement.title
+    const detail = document.createElement('div')
+    detail.className = 'detail'
+    detail.textContent = requirement.detail
+    item.append(title, detail)
+    for (const command of requirement.install) {
+      const row = document.createElement('div')
+      row.className = 'command'
+      const code = document.createElement('code')
+      code.textContent = command
+      row.append(code)
+      // Commands get a copy button; prose (a download link, a console step) does not.
+      if (/^(sudo |brew |pip |tlmgr |fc-list|apt-file |pacman |miktex )/.test(command)) {
+        const copy = document.createElement('button')
+        copy.textContent = 'Copy'
+        copy.addEventListener('click', () => {
+          copy.textContent = copyText(command.replace(/\s+#.*$/, '')) ? 'Copied' : 'Copy failed'
+          setTimeout(() => (copy.textContent = 'Copy'), 1500)
+        })
+        row.append(copy)
+      }
+      item.append(row)
+    }
+    const after = document.createElement('div')
+    after.className = 'detail muted'
+    after.textContent = requirement.install.length ? `For ${requirement.system}. After installing, press Recompile.` : ''
+    if (after.textContent) item.append(after)
+    box.append(item)
+  }
+}
+
 function renderIssues(result) {
+  renderRequirements(result)
   const issues = result?.issues ?? []
   const errors = issues.filter((issue) => issue.severity === 'error').length
   const warnings = issues.filter((issue) => issue.severity === 'warning').length
@@ -256,6 +314,7 @@ function renderIssues(result) {
 
   els.issues.textContent = ''
   for (const issue of issues) {
+    if (issue.requirement) continue // shown above, in the requirements box
     const row = document.createElement('div')
     row.className = `issue ${issue.severity}`
     const dot = document.createElement('span')

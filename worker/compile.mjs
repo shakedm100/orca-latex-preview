@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process'
 import { mkdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { needsRerun, parseLog } from './logparse.mjs'
+import { findRequirements } from './requirements.mjs'
 
 const STEP_TIMEOUT_MS = 180_000
 const MAX_ENGINE_RUNS = 4
@@ -96,7 +97,11 @@ export async function compileDocument(options) {
   let toolError = null
 
   const engineCommand = options.tools[options.engine]
-  if (options.useLatexmk && options.tools.latexmk) {
+  // latexmk runs the engine too, so a missing engine stops the build either way.
+  const missingEngine = engineCommand ? null : options.engine
+  if (missingEngine) {
+    toolError = `${options.engine} is not installed.`
+  } else if (options.useLatexmk && options.tools.latexmk) {
     const flag = { pdflatex: '-pdf', xelatex: '-pdfxe', lualatex: '-pdflua' }[options.engine]
     const args = [flag, '-f', ...common.filter((arg) => !arg.startsWith('-output-directory'))]
     if (outDir !== dir) args.push(`-outdir=${outDir}`)
@@ -104,8 +109,6 @@ export async function compileDocument(options) {
     const result = await run(options.tools.latexmk, args, { cwd: dir, env, signal: options.signal })
     steps.push({ tool: 'latexmk', code: result.code, timedOut: result.timedOut })
     if (result.code !== 0 && !(await exists(logPath))) toolError = result.output.trim().slice(-2000)
-  } else if (!engineCommand) {
-    toolError = `${options.engine} was not found. Install TeX Live, or set "Extra TeX bin folder" in the plugin settings.`
   } else {
     let runs = 0
     let bibDone = false
@@ -161,13 +164,19 @@ export async function compileDocument(options) {
   })
   for (const step of steps) {
     if (step.missing) {
-      issues.unshift({ severity: 'warning', file: null, line: null, message: `${step.tool} is needed for the bibliography but was not found.` })
+      continue // reported as a requirement below
     } else if ((step.tool === 'bibtex' || step.tool === 'biber') && step.code !== 0) {
       const detail = (step.output ?? '').split('\n').filter((line) => /error|ERROR|I couldn't|I found no/.test(line)).slice(0, 5).join(' ')
       issues.unshift({ severity: 'warning', file: null, line: null, message: `${step.tool} failed${detail ? `: ${detail}` : '.'}` })
     }
   }
-  if (toolError) issues.unshift({ severity: 'error', file: null, line: null, message: toolError })
+  if (toolError && !missingEngine) issues.unshift({ severity: 'error', file: null, line: null, message: toolError })
+  // What must be installed, with the command for this system; listed first among the issues too.
+  const requirements = await findRequirements({ log, steps, missingEngine, tools: options.tools, engine: options.engine, shellEscape: options.shellEscape })
+  for (const requirement of [...requirements].reverse()) {
+    const how = requirement.install[0] ? ` To install: ${requirement.install[0]}` : ''
+    issues.unshift({ severity: 'error', file: null, line: null, message: `${requirement.title}.${how}`, requirement: requirement.key })
+  }
 
   let pdfMtime = 0
   let pdfSize = 0
@@ -185,6 +194,7 @@ export async function compileDocument(options) {
     pdfSize,
     pdfMtime,
     issues,
+    requirements,
     steps,
     engine: options.engine,
     usedLatexmk: Boolean(options.useLatexmk && options.tools.latexmk),

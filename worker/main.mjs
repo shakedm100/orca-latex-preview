@@ -173,6 +173,7 @@ export default async function activate(orca) {
             durationMs: r.durationMs,
             usedLatexmk: r.usedLatexmk,
             issues: r.issues,
+            requirements: r.requirements ?? [],
             logTail: r.logTail.slice(-8000)
           }
         : null
@@ -297,6 +298,10 @@ export default async function activate(orca) {
         build.pdf = { rev: pdfRev, mtime: result.pdfMtime, bytes: await readFile(result.pdfPath) }
       }
       build.status = result.ok ? 'ok' : result.produced ? 'warnings' : 'failed'
+      // Spelled out in the plugin log too, for anyone (or any agent) reading `orca plugin logs`.
+      for (const requirement of result.requirements ?? []) {
+        orca.log(`[requirement] ${requirement.title}. ${requirement.detail} Install on ${requirement.system}: ${requirement.install.join(' | ') || 'nothing to install'}`)
+      }
       orca.log(
         `${path.basename(build.root)}: ${build.status} in ${result.durationMs} ms, ${result.issues.length} issues` +
           (build.trigger ? ` (${build.trigger})` : '')

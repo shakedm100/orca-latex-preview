@@ -25,12 +25,21 @@
           <button id="compile" class="primary" title="Recompile (Ctrl+Enter)" disabled><svg viewBox="0 0 24 24"><path d="M7 5l12 7-12 7z" /></svg><span>Recompile</span></button>
         </header>
         <div id="outline" class="popover" role="menu" hidden></div>
+        <section id="requirements" class="requirements" role="alert" hidden></section>
         <section id="issues" class="issues" hidden></section>
         <main id="viewer" class="viewer" tabindex="0">
           <div id="empty" class="empty"><p class="title">Compiling…</p><p class="muted"></p></div>
         </main>
       </section>
     </div>
+    <script>
+      // Inline on purpose: in Orca's browser client, plugin frames cannot load files from the
+      // plugin folder, so the code never starts. Say so instead of leaving a blank view.
+      setTimeout(() => {
+        if (window.__pluginStarted) return
+        document.body.innerHTML = '<div style="font:13px system-ui,sans-serif;color:var(--orca-foreground,#888);padding:32px;text-align:center"><p style="font-weight:600;margin:0 0 6px">This view needs the Orca desktop app</p><p style="margin:0;opacity:.75">It loads its code and a background worker from the plugin folder, which this Orca client does not allow. Open the file in Orca&rsquo;s desktop app.</p></div>'
+      }, 4000)
+    </script>
     <script type="module" src="app.js"></script>
   </body>
 </html>
