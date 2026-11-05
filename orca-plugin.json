@@ -4,7 +4,7 @@
   "execution": "trusted-worker",
   "id": "latex-preview",
   "name": "LaTeX Preview",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Adds PDF and Editor | PDF views to .tex files: the compiled document, or the source and the PDF side by side, rebuilt as you type, with source and PDF jumps, autocomplete and an outline.",
   "author": {
     "name": "shakedm100",

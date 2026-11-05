@@ -3,8 +3,6 @@
 import * as pdfjs from './vendor/pdfjs/pdf.min.mjs'
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdfjs/pdf.worker.min.mjs', import.meta.url).href
-const CMAP_URL = new URL('./vendor/pdfjs/cmaps/', import.meta.url).href
-const FONT_URL = new URL('./vendor/pdfjs/standard_fonts/', import.meta.url).href
 const ZOOM_STEPS = [0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4]
 const PAGE_GAP = 10
 
@@ -180,10 +178,9 @@ export function createViewer(els) {
     const generation = ++view.generation
     const anchor = view.pages.length ? readAnchor() : { index: 0, fraction: 0, left: 0 }
     const doc = await pdfjs.getDocument({
+      // No character maps or standard font files: the store refuses binary files, and TeX
+      // engines embed every font, so pdf.js falls back to system fonts only for other PDFs.
       data: bytes,
-      cMapUrl: CMAP_URL,
-      cMapPacked: true,
-      standardFontDataUrl: FONT_URL,
       isEvalSupported: false,
       enableXfa: false
     }).promise

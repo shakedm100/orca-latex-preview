@@ -140,7 +140,9 @@ orca plugin dev request . latex.diagnostics  # builds, sessions and tools the wo
 - `editor/`: the two views. `split.html` and `pdf.html` share `app.js` (document sync and the
   worker session), `viewer.js` (pdf.js viewer), `source-editor.js` (CodeMirror) and `completions.js`.
 - Vendored: pdf.js 4.10.38 (Apache-2.0) in `editor/vendor/pdfjs`, and a CodeMirror 6 bundle
-  (MIT) with the stex mode in `editor/vendor/codemirror.mjs`.
+  (MIT) with the stex mode in `editor/vendor/codemirror.mjs`. pdf.js ships without its
+  character maps and standard font files: TeX output embeds its fonts, and the plugin store
+  does not accept binary files.
 
 ## License
 
