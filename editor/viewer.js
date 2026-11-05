@@ -11,7 +11,7 @@ const PAGE_GAP = 10
  *   onDoubleClick?: (point: { page: number, x: number, y: number }) => void }} els
  */
 export function createViewer(els) {
-  const view = { pdf: null, pages: [], zoom: 'fit', observer: null, generation: 0 }
+  const view = { pdf: null, pages: [], zoom: 'fit', observer: null, generation: 0, place: null }
 
   function readAnchor() {
     const top = els.scroller.scrollTop
@@ -176,7 +176,7 @@ export function createViewer(els) {
   /** Replaces the document, keeping the reader's place. Resolves once it is on screen. */
   async function show(bytes) {
     const generation = ++view.generation
-    const anchor = view.pages.length ? readAnchor() : { index: 0, fraction: 0, left: 0 }
+    const anchor = view.pages.length ? readAnchor() : (view.place ?? { index: 0, fraction: 0, left: 0 })
     const doc = await pdfjs.getDocument({
       // No character maps or standard font files: the store refuses binary files, and TeX
       // engines embed every font, so pdf.js falls back to system fonts only for other PDFs.
@@ -218,6 +218,7 @@ export function createViewer(els) {
     view.pdf = doc
     view.pages = pages
     restoreAnchor(anchor)
+    view.place = null
     observePages(generation)
     updateLabels()
     if (previous) void previous.destroy()
@@ -327,6 +328,19 @@ export function createViewer(els) {
   return {
     show,
     reveal,
+    /** Where the reader is (page, position on it, zoom), to restore when the view reopens. */
+    getPlace: () => (view.pages.length ? { ...readAnchor(), zoom: view.zoom } : null),
+    /** Opens the next document at `place` instead of the top. */
+    setPlace(place) {
+      if (!place || !Number.isInteger(place.index)) return
+      if (place.zoom === 'fit' || (typeof place.zoom === 'number' && place.zoom > 0)) view.zoom = place.zoom
+      const anchor = { index: place.index, fraction: Number(place.fraction) || 0, left: Number(place.left) || 0 }
+      if (view.pages.length) {
+        rescale()
+        restoreAnchor(anchor)
+        updateLabels()
+      } else view.place = anchor
+    },
     goToPage,
     get pageCount() {
       return view.pages.length

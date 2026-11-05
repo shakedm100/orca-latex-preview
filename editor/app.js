@@ -31,6 +31,42 @@ const request = (name, input = {}, timeoutMs = 30000) =>
     ? orca.plugin.request(name, input, { timeoutMs })
     : orca.host.call('plugin.request', { name, input, timeoutMs }).then((answer) => answer.output)
 
+// Orca refuses a request from an editor over 64 KiB, so longer text goes ahead in parts and
+// the request carries the upload's id instead.
+const PART_BYTES = 48 * 1024
+const utf8 = new TextEncoder()
+const jsonBytes = (text) => utf8.encode(JSON.stringify(text)).length
+
+async function withText(input, text) {
+  if (jsonBytes(text) <= PART_BYTES) return { ...input, text }
+  const parts = []
+  let start = 0
+  while (start < text.length) {
+    let end = Math.min(text.length, start + PART_BYTES / 2)
+    while (end - start > 1 && jsonBytes(text.slice(start, end)) > PART_BYTES) end = start + Math.floor((end - start) / 2)
+    const last = text.charCodeAt(end - 1)
+    if (end < text.length && last >= 0xd800 && last <= 0xdbff) end -= 1 // keep surrogate pairs whole
+    parts.push(text.slice(start, end))
+    start = end
+  }
+  const uploadId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  for (let index = 0; index < parts.length; index += 1) {
+    await request('latex.text', { uploadId, index, count: parts.length, part: parts[index] })
+  }
+  return { ...input, textId: uploadId }
+}
+
+// Updates go one at a time, so a slower upload of older text never lands after newer text.
+let sending = Promise.resolve()
+function sendText() {
+  const run = sending.then(async () => {
+    if (!app.sessionId) return
+    await request('latex.update', await withText({ sessionId: app.sessionId }, app.doc.value))
+  })
+  sending = run.catch(() => {})
+  return run
+}
+
 const viewer = createViewer({
   scroller: els.viewer,
   pageInput: $('pageInput'),
@@ -93,19 +129,83 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 // ------------------------------------------------------------------ session with the worker
 
+// ------------------------------------------------------------------ reading position
+// Orca rebuilds the view when its tab comes back, so the place in the PDF and in the source is
+// kept per file (and per view) in this plugin's own localStorage.
+
+const placeKey = () => (app.file ? `place:${MODE}:${app.file}` : null)
+
+function savePlace() {
+  const key = placeKey()
+  if (!key) return
+  try {
+    // Until the PDF is on screen there is no PDF position yet: keep the stored one.
+    const before = JSON.parse(localStorage.getItem(key) ?? 'null')
+    const place = { pdf: viewer.getPlace() ?? before?.pdf ?? null, source: app.editor?.getPlace() ?? null, at: Date.now() }
+    if (!place.pdf && !place.source) return
+    localStorage.setItem(key, JSON.stringify(place))
+  } catch {
+    // Storage full or unavailable: positions are a convenience.
+  }
+}
+
+function restorePlace() {
+  let place = null
+  try {
+    place = JSON.parse(localStorage.getItem(placeKey()) ?? 'null')
+  } catch {
+    return
+  }
+  if (!place) return
+  if (place.pdf) viewer.setPlace(place.pdf)
+  if (place.source && app.editor) app.editor.setPlace(place.source)
+}
+
+let placeTimer = 0
+function placeChanged() {
+  if (placeTimer) return
+  placeTimer = setTimeout(() => {
+    placeTimer = 0
+    savePlace()
+  }, 300)
+}
+
+function trackPlace() {
+  document.addEventListener('scroll', placeChanged, { capture: true, passive: true })
+  for (const type of ['keyup', 'pointerup']) document.addEventListener(type, placeChanged, true)
+  document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && savePlace())
+  pruneStoredPlaces()
+}
+
+/** Keeps the 200 most recent files' positions. */
+function pruneStoredPlaces() {
+  try {
+    const entries = []
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const key = localStorage.key(i)
+      if (key?.startsWith('place:')) entries.push([key, JSON.parse(localStorage.getItem(key))?.at ?? 0])
+    }
+    entries.sort((a, b) => b[1] - a[1])
+    for (const [key] of entries.slice(200)) localStorage.removeItem(key)
+  } catch {
+    // Ignore: nothing depends on this.
+  }
+}
+
 async function attach(choice) {
   if (app.attaching) return app.attaching
   app.attaching = (async () => {
     setStatus('compiling', 'Finding this file in your workspaces…')
-    const input = { text: app.doc.value }
-    if (choice) Object.assign(input, choice)
+    const input = await withText({ ...choice }, app.doc.value)
     const answer = await request('latex.attach', input, 60000)
     if (!answer.sessionId) {
       showChoices(answer.candidates)
       return false
     }
     app.sessionId = answer.sessionId
+    const firstAttach = !app.file
     app.file = answer.file
+    if (firstAttach) restorePlace()
     app.relToRoot = answer.relToRoot
     els.compile.disabled = false
     applyState(answer.state)
@@ -177,7 +277,7 @@ function textChanged() {
   updateTimer = setTimeout(async () => {
     if (!app.sessionId) return
     try {
-      await request('latex.update', { sessionId: app.sessionId, text: app.doc.value })
+      await sendText()
       scheduleProjectRefresh()
     } catch (error) {
       if (String(error.message).includes('session_lost')) {
@@ -192,7 +292,7 @@ async function recompile() {
   if (!app.sessionId) return
   clearTimeout(updateTimer)
   try {
-    await request('latex.update', { sessionId: app.sessionId, text: app.doc.value })
+    await sendText()
     applyState(await request('latex.compile', { sessionId: app.sessionId }))
   } catch (error) {
     showBanner(error.message)
@@ -629,10 +729,12 @@ async function start() {
     app.doc = await orca.document.session()
     app.doc.onReplace(() => textChanged())
   }
+  trackPlace()
   if (await attach()) void poll()
 }
 
 window.addEventListener('pagehide', () => {
+  savePlace()
   app.closed = true
   if (app.sessionId) void request('latex.detach', { sessionId: app.sessionId }).catch(() => undefined)
 })

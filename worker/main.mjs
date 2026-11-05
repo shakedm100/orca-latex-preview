@@ -402,10 +402,27 @@ export default async function activate(orca) {
     }
   }
 
+  // Orca caps a request from an editor at 64 KiB, so a long document arrives in parts
+  // (`latex.text`) and `latex.attach` or `latex.update` then names the upload instead of the text.
+  const uploads = new Map()
+  const UPLOAD_TTL_MS = 60_000
+  const MAX_UPLOAD_PARTS = 4096
+
+  function takeText({ text, textId }) {
+    if (textId === undefined) return text
+    const upload = uploads.get(textId)
+    uploads.delete(textId)
+    if (!upload || upload.received !== upload.parts.length) throw coded('invalid_params', 'The document text did not arrive in full; try again.')
+    return upload.parts.join('')
+  }
+
   setInterval(() => {
     const now = Date.now()
     for (const session of sessions.values()) {
       if (now - session.lastSeen > SESSION_TTL_MS) detach(session)
+    }
+    for (const [id, upload] of uploads) {
+      if (now - upload.at > UPLOAD_TTL_MS) uploads.delete(id)
     }
   }, 15_000).unref?.()
 
@@ -417,7 +434,24 @@ export default async function activate(orca) {
     return before !== text
   }
 
-  orca.panels.handle('latex.attach', async ({ text, path: chosen, workspaceId }) => {
+  orca.panels.handle('latex.text', async ({ uploadId, index, count, part }) => {
+    if (typeof uploadId !== 'string' || typeof part !== 'string' || !Number.isInteger(count) || count < 1 || count > MAX_UPLOAD_PARTS || !Number.isInteger(index) || index < 0 || index >= count) {
+      throw coded('invalid_params', 'Bad document part.')
+    }
+    let upload = uploads.get(uploadId)
+    if (!upload) {
+      upload = { parts: new Array(count), received: 0, at: Date.now() }
+      uploads.set(uploadId, upload)
+    }
+    if (upload.parts.length !== count) throw coded('invalid_params', 'Bad document part.')
+    if (upload.parts[index] === undefined) upload.received += 1
+    upload.parts[index] = part
+    return { ok: true }
+  })
+
+  orca.panels.handle('latex.attach', async (input) => {
+    const { path: chosen, workspaceId } = input
+    const text = takeText(input)
     let file
     let workspace
     if (chosen) {
@@ -450,8 +484,9 @@ export default async function activate(orca) {
     }
   })
 
-  orca.panels.handle('latex.update', async ({ sessionId, text }) => {
-    const session = sessionOf(sessionId)
+  orca.panels.handle('latex.update', async (input) => {
+    const session = sessionOf(input.sessionId)
+    const text = takeText(input)
     const build = session.build
     if (await setOverlay(build, session.file, String(text))) {
       if (await setting('autoCompile', true)) {

@@ -192,6 +192,19 @@ export function createSourceEditor(parent, { text, readOnly, onChange, getProjec
       view.dispatch({ selection: { anchor: target.from }, effects: EditorView.scrollIntoView(target.from, { y: 'center' }) })
       view.focus()
     },
+    /** The selection and the first line on screen, to restore when the view reopens. */
+    getPlace() {
+      const { anchor, head } = view.state.selection.main
+      return { anchor, head, top: view.lineBlockAtHeight(view.scrollDOM.scrollTop).from }
+    },
+    setPlace(place) {
+      const length = view.state.doc.length
+      const clamp = (n) => Math.min(Math.max(0, Number(n) || 0), length)
+      view.dispatch({
+        selection: { anchor: clamp(place.anchor), head: clamp(place.head) },
+        effects: EditorView.scrollIntoView(clamp(place.top), { y: 'start' })
+      })
+    },
     /** The 1-based line and column of the cursor. */
     cursor() {
       const head = view.state.selection.main.head
