@@ -215,6 +215,22 @@ async function listFiles(rootDir) {
   return { tex, images, bib }
 }
 
+const ACCENTS = { '`': '\u0300', "'": '\u0301', '^': '\u0302', '~': '\u0303', '=': '\u0304', u: '\u0306', '.': '\u0307', '"': '\u0308', H: '\u030b', v: '\u030c', c: '\u0327', k: '\u0328' }
+const LETTERS = { i: 'ı', j: 'ȷ', ss: 'ß', o: 'ø', O: 'Ø', aa: 'å', AA: 'Å', ae: 'æ', AE: 'Æ', oe: 'œ', OE: 'Œ', l: 'ł', L: 'Ł' }
+
+/** A .bib field as plain text: TeX accents become letters (`{\'e}` is é), braces and commands go. */
+export function bibText(value) {
+  return value
+    .replace(/\\(ss|aa|AA|ae|AE|oe|OE|[ijoOlL])(?![A-Za-z])\s*(?:\{\})?/g, (_, name) => LETTERS[name])
+    .replace(/\\([`'^~=".]|[uHvck](?![A-Za-z]))\s*(?:\{\s*([A-Za-zıȷ])\s*\}|([A-Za-zıȷ]))/g, (_, accent, braced, bare) => `${(braced ?? bare).replace('ı', 'i').replace('ȷ', 'j')}${ACCENTS[accent]}`.normalize('NFC'))
+    .replace(/\\([&%$#_])/g, '$1')
+    .replace(/\\([A-Za-z]+)\s*/g, (_, name) => (/^(?:TeX|LaTeX|BibTeX|XeTeX|LuaTeX)$/.test(name) ? name : ''))
+    .replace(/[{}]/g, '')
+    .replace(/~/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 /** Keys, titles, authors and venues of a .bib file; null when it cannot be read. */
 async function readBib(file, read) {
   const text = await read(file)
@@ -230,7 +246,7 @@ async function readBib(file, read) {
     const body = text.slice(start, next === -1 ? start + 4000 : start + next)
     const field = (name) => {
       const found = new RegExp(`\\b${name}\\s*=\\s*[{"]((?:[^{}"]|\\{[^{}]*\\})*)[}"]`, 'i').exec(body)
-      return found ? found[1].replace(/[{}]/g, '').replace(/\s+/g, ' ').trim() : ''
+      return found ? bibText(found[1]) : ''
     }
     entries.push({
       key: match[2],

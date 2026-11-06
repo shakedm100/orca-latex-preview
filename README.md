@@ -1,5 +1,7 @@
 # LaTeX Preview for Orca
 
+![Editor | PDF: the LaTeX source beside its compiled PDF](images/screenshot-split-dark.png)
+
 Adds two views to every `.tex` file, in the editor's view toggle next to Source and Changes:
 
 - **Editor | PDF**: the source on the left and the compiled PDF on the right.

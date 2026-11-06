@@ -4,7 +4,7 @@
   "execution": "trusted-worker",
   "id": "latex-preview",
   "name": "LaTeX Preview",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Adds PDF and Editor | PDF views to .tex files: the compiled document, or the source and the PDF side by side, rebuilt as you type, with source and PDF jumps, autocomplete and an outline.",
   "author": {
     "name": "shakedm100",
@@ -14,6 +14,34 @@
   "homepage": "https://github.com/shakedm100/orca-latex-preview",
   "license": "MIT",
   "icon": "images/icon.png",
+  "cover": {
+    "path": "images/cover.png",
+    "alt": "LaTeX Preview in Orca: LaTeX source on the left, its compiled PDF on the right, with a search for \"heat\" highlighted in the PDF"
+  },
+  "screenshots": [
+    {
+      "path": "images/screenshot-split-dark.png",
+      "caption": "Editor | PDF: the source and the PDF, rebuilt as you type",
+      "theme": "dark",
+      "alt": "LaTeX source in a dark editor on the left and the compiled two-page PDF on the right"
+    },
+    {
+      "path": "images/screenshot-split-light.png",
+      "caption": "Editor | PDF: the source and the PDF, rebuilt as you type",
+      "theme": "light",
+      "alt": "The same split view in Orca's light theme"
+    },
+    {
+      "path": "images/screenshot-find.png",
+      "caption": "Find in the PDF, with every match highlighted",
+      "alt": "The PDF with a find bar searching for heat, its five matches highlighted and the current one in orange"
+    },
+    {
+      "path": "images/screenshot-hover.png",
+      "caption": "Hover a citation for its title, authors and venue",
+      "alt": "A tooltip over a citation key showing the book title, author, year, publisher and reference number"
+    }
+  ],
   "engines": {
     "orca": ">=1.4.248"
   },

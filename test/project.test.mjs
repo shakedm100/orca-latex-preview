@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { test } from 'node:test'
-import { countWords, labelContext, scanProject, stripComments } from '../worker/project.mjs'
+import { bibText, countWords, labelContext, scanProject, stripComments } from '../worker/project.mjs'
 
 const rootDir = fileURLToPath(new URL('./fixtures/project/', import.meta.url))
 const root = path.join(rootDir, 'main.tex')
@@ -28,7 +28,7 @@ test('reads citation keys, authors, years and venues', async () => {
   const knuth = project.citations.find((entry) => entry.key === 'knuth1984')
   assert.equal(knuth.year, '1984')
   assert.equal(knuth.venue, 'Addison-Wesley')
-  assert.equal(knuth.title, 'The \\TeXbook')
+  assert.equal(knuth.title, 'The TeXbook')
   const lamport = project.citations.find((entry) => entry.key === 'lamport1986')
   assert.equal(lamport.venue, 'Journal of Examples')
 })
@@ -52,4 +52,12 @@ test('word count skips the preamble, math, commands and comments', () => {
 
 test('comments are removed but escaped percent signs stay', () => {
   assert.equal(stripComments('50\\% done % comment\nnext'), '50\\% done \nnext')
+})
+
+test('bibliography text: TeX accents and special letters become plain letters', () => {
+  assert.equal(bibText("Th{\\'e}orie analytique de la chaleur"), 'Théorie analytique de la chaleur')
+  assert.equal(bibText('Erd\\H{o}s and G{\\"o}del and \\v{C}ech'), 'Erdős and Gödel and Čech')
+  assert.equal(bibText('Stra{\\ss}e, {\\AA}ngstr{\\"o}m, \\l{}uk, na\\"{\\i}ve'), 'Straße, Ångström, łuk, naïve')
+  assert.equal(bibText('{LaTeX}: A {\\TeX} \\& {B}ib{\\TeX} guide'), 'LaTeX: A TeX & BibTeX guide')
+  assert.equal(bibText('Fran\\c{c}ois  and~Jos\\\'e'), 'François and José')
 })
