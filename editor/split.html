@@ -16,6 +16,7 @@
           <span class="spacer"></span>
           <span id="words" class="muted" hidden></span>
           <button id="issuesToggle" class="chip" hidden></button>
+          <button id="findToggle" class="icon" title="Find in PDF (Ctrl+F)" aria-label="Find in PDF" aria-expanded="false"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6" /><path d="M20 20l-4.5-4.5" /></svg></button>
           <button id="outlineToggle" class="icon" title="Outline" aria-label="Outline" aria-haspopup="menu" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M4 6h16M8 12h12M12 18h8" /></svg></button>
           <span id="page" class="page-box muted" hidden><input id="pageInput" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" spellcheck="false" aria-label="Page number" title="Type a page number and press Enter" /><span id="pageCount"></span></span>
           <button id="zoomOut" class="icon" title="Zoom out (Ctrl+-)" aria-label="Zoom out"><svg viewBox="0 0 24 24"><path d="M5 12h14" /></svg></button>
@@ -27,6 +28,13 @@
         <div id="outline" class="popover" role="menu" hidden></div>
         <section id="requirements" class="requirements" role="alert" hidden></section>
         <section id="issues" class="issues" hidden></section>
+        <div id="findBar" class="findbar" role="search" hidden>
+          <input id="findInput" type="search" placeholder="Find in PDF" aria-label="Find in PDF" spellcheck="false" autocomplete="off" />
+          <span id="findCount" class="muted" aria-live="polite"></span>
+          <button id="findPrev" class="icon" title="Previous match (Shift+Enter)" aria-label="Previous match"><svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6" /></svg></button>
+          <button id="findNext" class="icon" title="Next match (Enter)" aria-label="Next match"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg></button>
+          <button id="findClose" class="icon" title="Close (Esc)" aria-label="Close find"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></svg></button>
+        </div>
         <main id="viewer" class="viewer" tabindex="0">
           <div id="empty" class="empty"><p class="title">Compiling…</p><p class="muted"></p></div>
         </main>

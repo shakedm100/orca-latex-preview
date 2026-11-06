@@ -63,19 +63,52 @@ async function exists(file) {
  * @param {string} options.outDir      absolute output folder
  * @param {string} [options.overlayDir] folder searched before the project: unsaved editor buffers
  * @param {boolean} options.shellEscape
+ * @param {ReturnType<import('./preamble.mjs').createPreambleCache>} [options.preambleCache]  precompiled preambles, when on
  * @param {AbortSignal} [options.signal]
  */
 export async function compileDocument(options) {
   const started = Date.now()
-  const dir = path.dirname(options.root)
-  const file = path.basename(options.root)
-  const base = file.replace(/\.[^.]+$/, '')
-  const outDir = options.outDir
-  const pdfPath = path.join(outDir, `${base}.pdf`)
-  const logPath = path.join(outDir, `${base}.log`)
-  await mkdir(outDir, { recursive: true })
+  let format = null
+  if (options.preambleCache) {
+    const dir = path.dirname(options.root)
+    const overlayRoot = options.overlayDir ? path.join(options.overlayDir, path.basename(options.root)) : null
+    const text = (overlayRoot && (await readIfExists(overlayRoot))) || (await readIfExists(options.root))
+    try {
+      await mkdir(options.outDir, { recursive: true })
+      format = await options.preambleCache.prepare({
+        root: options.root,
+        engine: options.engine,
+        tools: options.tools,
+        env: buildEnv(options, dir),
+        dir,
+        outDir: options.outDir,
+        overlayDir: options.overlayDir,
+        text
+      })
+    } catch {
+      format = null
+    }
+  }
+  const result = await compileOnce(options, format)
+  if (format && format.entry.state === 'ready') {
+    // The first build with a new format: if it has errors, check them against a usual build,
+    // and keep the format only when it was not the cause.
+    const errors = result.issues.filter((issue) => issue.severity === 'error').length
+    if (errors === 0) options.preambleCache.trust(format.entry)
+    else {
+      const plain = await compileOnce(options, null)
+      const plainErrors = plain.issues.filter((issue) => issue.severity === 'error').length
+      if (plainErrors < errors) options.preambleCache.reject(options.root)
+      else options.preambleCache.trust(format.entry)
+      return { ...plain, durationMs: Date.now() - started }
+    }
+  }
+  return { ...result, durationMs: Date.now() - started }
+}
 
-  const env = {
+/** The child processes' environment: TeX's search paths with the unsaved buffers first. */
+function buildEnv(options, dir) {
+  return {
     ...process.env,
     PATH: [...options.searchDirs, process.env.PATH ?? ''].join(path.delimiter),
     // One message per log line, so the log parser sees whole file:line: errors.
@@ -86,8 +119,23 @@ export async function compileDocument(options) {
     // empty entry). BibTeX runs inside the output folder but its .bib files sit with the sources.
     TEXINPUTS: [options.overlayDir, dir, ''].filter((entry) => entry !== undefined).join(path.delimiter),
     BIBINPUTS: [options.overlayDir, dir, ''].filter((entry) => entry !== undefined).join(path.delimiter),
-    BSTINPUTS: [options.overlayDir, dir, ''].filter((entry) => entry !== undefined).join(path.delimiter)
+    BSTINPUTS: [options.overlayDir, dir, ''].filter((entry) => entry !== undefined).join(path.delimiter),
+    // A precompiled preamble sits in the output folder.
+    TEXFORMATS: [options.outDir, ''].join(path.delimiter)
   }
+}
+
+async function compileOnce(options, format) {
+  const started = Date.now()
+  const dir = path.dirname(options.root)
+  const file = path.basename(options.root)
+  const base = file.replace(/\.[^.]+$/, '')
+  const outDir = options.outDir
+  const pdfPath = path.join(outDir, `${base}.pdf`)
+  const logPath = path.join(outDir, `${base}.log`)
+  await mkdir(outDir, { recursive: true })
+
+  const env = buildEnv(options, dir)
   const common = ['-interaction=nonstopmode', '-file-line-error', '-synctex=1']
   if (options.shellEscape) common.push('-shell-escape')
   if (outDir !== dir) common.push(`-output-directory=${outDir}`)
@@ -104,6 +152,8 @@ export async function compileDocument(options) {
   } else if (options.useLatexmk && options.tools.latexmk) {
     const flag = { pdflatex: '-pdf', xelatex: '-pdfxe', lualatex: '-pdflua' }[options.engine]
     const args = [flag, '-f', ...common.filter((arg) => !arg.startsWith('-output-directory'))]
+    // latexmk runs this command line for pdfLaTeX, with its own options (%O) and the file (%S).
+    if (format) args.push(`-pdflatex="${engineCommand}" -fmt=${format.name} %O %S`)
     if (outDir !== dir) args.push(`-outdir=${outDir}`)
     args.push(file)
     const result = await run(options.tools.latexmk, args, { cwd: dir, env, signal: options.signal })
@@ -114,7 +164,7 @@ export async function compileDocument(options) {
     let bibDone = false
     for (;;) {
       if (options.signal?.aborted) break
-      const result = await run(engineCommand, [...common, file], { cwd: dir, env, signal: options.signal })
+      const result = await run(engineCommand, [...common, ...(format ? [`-fmt=${format.name}`] : []), file], { cwd: dir, env, signal: options.signal })
       runs += 1
       steps.push({ tool: options.engine, code: result.code, timedOut: result.timedOut })
       if (result.timedOut) {
@@ -158,9 +208,14 @@ export async function compileDocument(options) {
   const log = await readIfExists(logPath)
   const issues = parseLog(log).map((issue) => {
     if (!issue.file) return issue
-    const absolute = path.resolve(dir, issue.file)
+    let absolute = path.resolve(dir, issue.file)
+    // An unsaved buffer is read from the overlay folder: report it as the project file it stands for.
+    if (options.overlayDir) {
+      const inOverlay = path.relative(options.overlayDir, absolute)
+      if (!inOverlay.startsWith('..') && !path.isAbsolute(inOverlay)) absolute = path.join(dir, inOverlay)
+    }
     const relative = path.relative(dir, absolute)
-    return { ...issue, file: relative.startsWith('..') ? absolute : relative }
+    return { ...issue, file: relative.startsWith('..') || path.isAbsolute(relative) ? absolute : relative.split(path.sep).join('/') }
   })
   for (const step of steps) {
     if (step.missing) {
@@ -198,6 +253,7 @@ export async function compileDocument(options) {
     steps,
     engine: options.engine,
     usedLatexmk: Boolean(options.useLatexmk && options.tools.latexmk),
+    usedPreamble: Boolean(format),
     durationMs: Date.now() - started,
     logTail: log.slice(-LOG_TAIL_BYTES)
   }

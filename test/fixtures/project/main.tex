@@ -1,0 +1,21 @@
+\documentclass{article}
+\usepackage{amsmath}
+\begin{document}
+\section{Introduction}\label{sec:intro}
+We cite \cite{knuth1984} and refer to Section~\ref{sec:intro}, Figure~\ref{fig:plot}
+and a missing \ref{nowhere} and \cite{nobody2020}.
+
+\begin{figure}[h]
+  \centering
+  \rule{2cm}{1cm}
+  \caption{A plot of results}
+  \label{fig:plot}
+\end{figure}
+
+\input{chapter}
+
+An overfull line: \hbox to 10pt{this text is much wider than ten points}.
+
+\bibliographystyle{plain}
+\bibliography{refs}
+\end{document}

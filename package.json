@@ -1,0 +1,9 @@
+{
+  "name": "orca-latex-preview",
+  "private": true,
+  "type": "module",
+  "description": "Development scripts only; the plugin itself needs no install step.",
+  "scripts": {
+    "test": "node --test"
+  }
+}

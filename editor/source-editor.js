@@ -20,6 +20,7 @@ import {
   tags
 } from './vendor/codemirror.mjs'
 import { latexCompletions } from './completions.js'
+import { latexTools } from './latex-tools.js'
 
 /** Dark when Orca says so, else judged by the frame background Orca painted. */
 function isDark() {
@@ -128,6 +129,7 @@ export function createSourceEditor(parent, { text, readOnly, onChange, getProjec
   const themeSlot = new Compartment()
   const readOnlySlot = new Compartment()
   let applyingOutside = false
+  const tools = latexTools(getProject)
 
   const view = new EditorView({
     parent,
@@ -141,6 +143,7 @@ export function createSourceEditor(parent, { text, readOnly, onChange, getProjec
         EditorView.lineWrapping,
         EditorState.languageData.of(() => [{ autocomplete: latexCompletions(getProject) }]),
         flashField,
+        tools.extensions,
         EditorView.domEventHandlers({
           dblclick(event, view) {
             const pos = view.posAtCoords({ x: event.clientX, y: event.clientY })
@@ -220,6 +223,10 @@ export function createSourceEditor(parent, { text, readOnly, onChange, getProjec
       })
       view.focus()
       setTimeout(() => view.dispatch({ effects: setFlash.of(null) }), 1400)
+    },
+    /** New project data (labels, citations): redraw the undefined-key marks. */
+    projectChanged() {
+      view.dispatch({ effects: tools.projectChanged() })
     },
     markErrors(lines) {
       view.dispatch({ effects: setErrorLines.of(lines) })

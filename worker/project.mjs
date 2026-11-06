@@ -17,6 +17,7 @@ const NEWENV = /\\(?:new|renew)environment\s*\{([^}]+)\}\s*(?:\[(\d)\])?/g
 const NEWTHEOREM = /\\newtheorem\*?\s*\{([^}]+)\}/g
 const BIBLIOGRAPHY = /\\bibliography\s*\{([^}]+)\}/g
 const ADDBIB = /\\addbibresource\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}/g
+const BIBITEM = /\\bibitem\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}/g
 const USEPACKAGE = /\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}/g
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.pdf', '.eps', '.svg', '.gif', '.tif', '.tiff'])
 const MAX_FILES = 200
@@ -81,6 +82,7 @@ export async function scanProject(build) {
   const bibFiles = new Set()
   const visited = new Set()
   const texts = []
+  const bibItems = []
 
   async function walk(file, depth, base) {
     if (visited.has(file) || visited.size >= MAX_FILES || depth > 12) return
@@ -117,7 +119,12 @@ export async function scanProject(build) {
       }
     }
 
-    for (const match of text.matchAll(LABEL)) labels.push({ name: match[1].trim(), file, line: lineAt(text, match.index) })
+    for (const match of text.matchAll(LABEL)) {
+      labels.push({ name: match[1].trim(), file, line: lineAt(text, match.index), context: labelContext(text, match.index) })
+    }
+    for (const match of text.matchAll(BIBITEM)) {
+      bibItems.push({ key: match[1].trim(), type: 'bibitem', title: '', author: '', year: '', venue: '', file, line: lineAt(text, match.index) })
+    }
     for (const match of text.matchAll(NEWCOMMAND)) commands.set(match[1], { name: match[1], args: Number(match[2] ?? 0), file })
     for (const match of text.matchAll(DEF)) if (!commands.has(match[1])) commands.set(match[1], { name: match[1], args: 0, file })
     for (const match of text.matchAll(MATHOP)) commands.set(match[1], { name: match[1], args: 0, file })
@@ -141,7 +148,25 @@ export async function scanProject(build) {
   // No \bibliography found (a template, or one set by a macro): offer every .bib nearby.
   if (bibFiles.size === 0) for (const file of files.bib) bibFiles.add(path.join(build.rootDir, file))
   const citations = []
-  for (const bib of bibFiles) citations.push(...(await readBib(bib, read)))
+  const bibFound = []
+  for (const bib of bibFiles) {
+    const entries = await readBib(bib, read)
+    if (entries) {
+      bibFound.push(bib)
+      citations.push(...entries)
+    }
+  }
+  citations.push(...bibItems)
+  // Numbers from the last build: \newlabel and \bibcite in the .aux files.
+  const aux = build.outDir ? await readAux(build.outDir) : { labels: new Map(), cites: new Map() }
+  for (const label of labels) {
+    const found = aux.labels.get(label.name)
+    if (found) Object.assign(label, found)
+  }
+  for (const entry of citations) {
+    const number = aux.cites.get(entry.key)
+    if (number) entry.number = number
+  }
 
   return {
     outline,
@@ -150,6 +175,8 @@ export async function scanProject(build) {
     environments: [...environments.values()],
     packages: [...packages].filter(Boolean),
     citations,
+    // Whether the bibliography could be read, so a key it lacks can be called undefined.
+    citationSources: bibFound.length + (bibItems.length ? 1 : 0),
     files: { tex: files.tex, images: files.images, bib: files.bib },
     sources: [...visited],
     words: countWords(texts)
@@ -188,23 +215,100 @@ async function listFiles(rootDir) {
   return { tex, images, bib }
 }
 
-/** Keys, titles and authors of a .bib file. */
+/** Keys, titles, authors and venues of a .bib file; null when it cannot be read. */
 async function readBib(file, read) {
   const text = await read(file)
-  if (!text) return []
+  if (text === null || text === undefined) return null
   const entries = []
   const ENTRY = /@(\w+)\s*[{(]\s*([^,\s{}]+)\s*,/g
   for (const match of text.matchAll(ENTRY)) {
     const type = match[1].toLowerCase()
     if (type === 'comment' || type === 'string' || type === 'preamble') continue
-    const body = text.slice(match.index + match[0].length, match.index + match[0].length + 2000)
+    // Up to the next entry, so a field this entry lacks is not taken from the one after it.
+    const start = match.index + match[0].length
+    const next = text.slice(start, start + 4000).search(/\n\s*@\w+\s*[{(]/)
+    const body = text.slice(start, next === -1 ? start + 4000 : start + next)
     const field = (name) => {
       const found = new RegExp(`\\b${name}\\s*=\\s*[{"]((?:[^{}"]|\\{[^{}]*\\})*)[}"]`, 'i').exec(body)
       return found ? found[1].replace(/[{}]/g, '').replace(/\s+/g, ' ').trim() : ''
     }
-    entries.push({ key: match[2], type, title: field('title'), author: field('author'), year: field('year') })
+    entries.push({
+      key: match[2],
+      type,
+      title: field('title'),
+      author: field('author'),
+      year: field('year') || field('date').slice(0, 4),
+      venue: field('journal') || field('journaltitle') || field('booktitle') || field('publisher') || field('school') || field('institution') || field('howpublished')
+    })
   }
   return entries
+}
+
+/**
+ * What a \label names, for a hover: its environment with the caption (`figure: Results`), or the
+ * heading it follows (`section: Method`).
+ */
+export function labelContext(text, index) {
+  const before = text.slice(Math.max(0, index - 3000), index)
+  const heading = /\\(part|chapter|section|subsection|subsubsection|paragraph)\*?\s*(?:\[[^\]]*\])?\s*\{/g
+  let lastHeading = null
+  for (const match of before.matchAll(heading)) lastHeading = match
+  // The innermost environment still open at the label.
+  const stack = []
+  for (const match of before.matchAll(/\\(begin|end)\s*\{([^}]+)\}/g)) {
+    if (match[1] === 'begin') stack.push({ name: match[2], at: match.index })
+    else if (stack.length && stack[stack.length - 1].name === match[2]) stack.pop()
+  }
+  const env = stack.filter((entry) => entry.name !== 'document').pop()
+  // A label within a few lines of a heading names that heading.
+  if (lastHeading && (!env || lastHeading.index > env.at) && before.length - lastHeading.index < 400) {
+    const title = groupAt(before, lastHeading.index + lastHeading[0].length - 1)
+    if (title !== null) return `${lastHeading[1]}: ${plainTitle(title)}`
+  }
+  if (env) {
+    // The caption inside the environment, before or after the label.
+    const start = Math.max(0, index - 3000) + env.at
+    const close = text.indexOf(`\\end{${env.name}}`, index)
+    const body = text.slice(start, close === -1 ? index + 1500 : close)
+    const caption = /\\caption\*?\s*(?:\[[^\]]*\])?\s*\{/.exec(body)
+    const title = caption ? groupAt(body, caption.index + caption[0].length - 1) : null
+    return title ? `${env.name}: ${plainTitle(title)}` : env.name
+  }
+  const lineStart = text.lastIndexOf('\n', index) + 1
+  const lineEnd = text.indexOf('\n', index)
+  return plainTitle(text.slice(lineStart, lineEnd === -1 ? undefined : lineEnd)).slice(0, 120)
+}
+
+/** \newlabel numbers and pages, and \bibcite numbers, from the .aux files of the last build. */
+async function readAux(outDir) {
+  const labels = new Map()
+  const cites = new Map()
+  const queue = [{ dir: outDir, depth: 0 }]
+  while (queue.length) {
+    const { dir, depth } = queue.shift()
+    let entries
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        if (depth < 4) queue.push({ dir: full, depth: depth + 1 })
+        continue
+      }
+      if (!entry.name.endsWith('.aux')) continue
+      const text = await readFile(full, 'utf8').catch(() => '')
+      for (const match of text.matchAll(/\\newlabel\{([^}]+)\}\{\{((?:[^{}]|\{[^{}]*\})*)\}\{((?:[^{}]|\{[^{}]*\})*)\}/g)) {
+        if (match[1].endsWith('@cref')) continue
+        labels.set(match[1], { number: plainTitle(match[2]) || null, page: plainTitle(match[3]) || null })
+      }
+      // \bibcite{key}{1}, or natbib's \bibcite{key}{{1}{2020}{{Author}}{{}}}.
+      for (const match of text.matchAll(/\\bibcite\{([^}]+)\}\{(\{?)([^{}]*)/g)) cites.set(match[1], match[3])
+    }
+  }
+  return { labels, cites }
 }
 
 /** Words in the body of a document, from the outline sources: text between \begin{document} and \end{document}. */

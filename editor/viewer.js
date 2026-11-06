@@ -12,6 +12,9 @@ const PAGE_GAP = 10
  */
 export function createViewer(els) {
   const view = { pdf: null, pages: [], zoom: 'fit', observer: null, generation: 0, place: null }
+  // Find in PDF: the query, every hit as boxes in PDF points from the page's top-left, the
+  // current one, and each page's searchable text (built once per document).
+  const find = { query: '', hits: [], index: -1, texts: null, generation: 0 }
 
   function readAnchor() {
     const top = els.scroller.scrollTop
@@ -61,7 +64,28 @@ export function createViewer(els) {
     page.canvas?.remove()
     page.canvas = canvas
     page.el.prepend(canvas)
+    void addTextLayer(page, viewport, generation)
     void addLinks(page)
+  }
+
+  /** Invisible text over the canvas, so text can be selected with the mouse and copied. */
+  async function addTextLayer(page, viewport, generation) {
+    const layer = document.createElement('div')
+    layer.className = 'textLayer'
+    const textLayer = new pdfjs.TextLayer({ textContentSource: page.pdfPage.streamTextContent(), container: layer, viewport })
+    try {
+      await textLayer.render()
+    } catch {
+      return
+    }
+    if (generation !== view.generation || page.rendered !== viewport.scale) return
+    // pdf.js's viewer adds this: it keeps a drag that leaves the text from selecting the whole page.
+    const end = document.createElement('div')
+    end.className = 'endOfContent'
+    layer.append(end)
+    page.textLayer?.remove()
+    page.textLayer = layer
+    page.canvas.after(layer)
   }
 
   async function addLinks(page) {
@@ -153,6 +177,7 @@ export function createViewer(els) {
       page.scale = scale
       page.el.style.width = `${Math.floor(viewport.width)}px`
       page.el.style.height = `${Math.floor(viewport.height)}px`
+      page.el.style.setProperty('--scale-factor', String(scale))
     }
     restoreAnchor(anchor)
     observePages(view.generation)
@@ -200,8 +225,9 @@ export function createViewer(els) {
       el.dataset.index = String(i)
       el.style.width = `${Math.floor(viewport.width)}px`
       el.style.height = `${Math.floor(viewport.height)}px`
+      el.style.setProperty('--scale-factor', String(scale))
       container.append(el)
-      return { el, pdfPage, canvas: null, scale, rendered: 0, task: null }
+      return { el, pdfPage, canvas: null, textLayer: null, scale, rendered: 0, task: null }
     })
     // Paint what the reader is looking at before swapping, so a rebuild does not flash.
     const first = Math.min(anchor.index, pages.length - 1)
@@ -222,7 +248,149 @@ export function createViewer(els) {
     observePages(generation)
     updateLabels()
     if (previous) void previous.destroy()
+    find.texts = null
+    if (find.query) void runFind(find.query, { keepPlace: true })
     els.onChange?.()
+  }
+
+  // ------------------------------------------------------------------ find in PDF
+
+  /** Each page's text with whitespace collapsed, and where each character came from. */
+  async function pageTexts() {
+    if (find.texts) return find.texts
+    const texts = []
+    for (const page of view.pages) {
+      let items = []
+      try {
+        items = (await page.pdfPage.getTextContent()).items
+      } catch {
+        // A page whose text cannot be read is not searchable.
+      }
+      let text = ''
+      const from = [] // per character: [item index, offset in item]
+      const add = (char, where) => {
+        if (/\s/.test(char)) {
+          if (text.endsWith(' ') || text === '') return
+          char = ' '
+        }
+        text += char
+        from.push(where)
+      }
+      items.forEach((item, i) => {
+        if (typeof item.str !== 'string') return
+        for (let k = 0; k < item.str.length; k += 1) add(item.str[k], [i, k])
+        if (item.hasEOL) add(' ', null)
+      })
+      texts.push({ text: text.toLowerCase(), from, items, viewport: page.pdfPage.getViewport({ scale: 1 }) })
+    }
+    find.texts = texts
+    return texts
+  }
+
+  /** Boxes, in PDF points from the page's top-left, around characters [start, end) of a page's text. */
+  function boxesFor(entry, start, end) {
+    const runs = new Map() // item index -> [first offset, last offset]
+    for (let c = start; c < end; c += 1) {
+      const where = entry.from[c]
+      if (!where) continue
+      const run = runs.get(where[0])
+      if (run) run[1] = where[1]
+      else runs.set(where[0], [where[1], where[1]])
+    }
+    const boxes = []
+    for (const [i, [first, last]] of runs) {
+      const item = entry.items[i]
+      const [, , c, d, e, f] = item.transform
+      const size = Math.hypot(c, d) || item.height || 10
+      const perChar = item.str.length ? item.width / item.str.length : 0
+      const x = e + perChar * first
+      const [x1, y1, x2, y2] = entry.viewport.convertToViewportRectangle([x, f - size * 0.25, x + perChar * (last - first + 1), f + size * 0.85])
+      boxes.push({ x: Math.min(x1, x2), y: Math.min(y1, y2), w: Math.abs(x2 - x1), h: Math.abs(y2 - y1) })
+    }
+    return boxes
+  }
+
+  const MAX_HITS = 5000
+
+  async function runFind(query, { keepPlace = false } = {}) {
+    const generation = ++find.generation
+    const previous = keepPlace ? find.hits[find.index] : null
+    find.query = query
+    find.hits = []
+    find.index = -1
+    clearHitMarks()
+    const needle = query.replace(/\s+/g, ' ').trim().toLowerCase()
+    if (!needle || !view.pages.length) return report()
+    const texts = await pageTexts()
+    if (generation !== find.generation) return
+    texts.forEach((entry, pageIndex) => {
+      let at = entry.text.indexOf(needle)
+      while (at !== -1 && find.hits.length < MAX_HITS) {
+        find.hits.push({ page: pageIndex, boxes: boxesFor(entry, at, at + needle.length) })
+        at = entry.text.indexOf(needle, at + needle.length)
+      }
+    })
+    if (find.hits.length) {
+      // Start from the reader's place: the same hit after a rebuild, else the first one on screen.
+      const anchor = readAnchor()
+      const wanted = previous ? previous.page : anchor.index
+      const index = find.hits.findIndex((hit) => hit.page >= wanted)
+      find.index = index === -1 ? 0 : index
+    }
+    drawHitMarks()
+    if (!keepPlace) scrollToHit()
+    return report()
+  }
+
+  function report() {
+    const result = { query: find.query, count: find.hits.length, index: find.index, capped: find.hits.length >= MAX_HITS }
+    els.onFind?.(result)
+    return result
+  }
+
+  function clearHitMarks() {
+    els.scroller.querySelectorAll('.find-hit').forEach((mark) => mark.remove())
+  }
+
+  function drawHitMarks() {
+    clearHitMarks()
+    find.hits.forEach((hit, i) => {
+      const page = view.pages[hit.page]
+      if (!page) return
+      for (const box of hit.boxes) {
+        const mark = document.createElement('div')
+        mark.className = i === find.index ? 'find-hit current' : 'find-hit'
+        // In PDF points times the page's --scale-factor, so zooming keeps them in place.
+        Object.assign(mark.style, {
+          left: `calc(var(--scale-factor) * ${box.x.toFixed(2)}px)`,
+          top: `calc(var(--scale-factor) * ${box.y.toFixed(2)}px)`,
+          width: `calc(var(--scale-factor) * ${box.w.toFixed(2)}px)`,
+          height: `calc(var(--scale-factor) * ${box.h.toFixed(2)}px)`
+        })
+        page.el.append(mark)
+      }
+    })
+  }
+
+  function scrollToHit() {
+    const hit = find.hits[find.index]
+    const page = hit && view.pages[hit.page]
+    if (!page || !hit.boxes.length) return
+    const top = Math.min(...hit.boxes.map((box) => box.y)) * page.scale
+    const left = Math.min(...hit.boxes.map((box) => box.x)) * page.scale
+    els.scroller.scrollTop = Math.max(0, page.el.offsetTop + top - els.scroller.clientHeight / 3)
+    if (left < els.scroller.scrollLeft || left > els.scroller.scrollLeft + els.scroller.clientWidth - 40) {
+      els.scroller.scrollLeft = Math.max(0, left - 40)
+    }
+    updateLabels()
+  }
+
+  function stepFind(direction) {
+    if (!find.hits.length) return report()
+    find.index = (find.index + direction + find.hits.length) % find.hits.length
+    drawHitMarks()
+    scrollToHit()
+    return report()
   }
 
   /** Scrolls to the top of 1-based `pageNumber`, clamped to the document. */
@@ -325,9 +493,25 @@ export function createViewer(els) {
     resizeTimer = setTimeout(rescale, 120)
   }).observe(els.scroller)
 
+  // A drag that starts on text selects text; pdf.js's viewer marks the layer while it does.
+  els.scroller.addEventListener('pointerdown', (event) => {
+    const layer = event.target.closest?.('.textLayer')
+    if (layer && event.button === 0) layer.classList.add('selecting')
+  })
+  document.addEventListener('pointerup', () => {
+    els.scroller.querySelectorAll('.textLayer.selecting').forEach((layer) => layer.classList.remove('selecting'))
+  })
+
   return {
     show,
     reveal,
+    find: (query) => runFind(query),
+    findNext: () => stepFind(1),
+    findPrevious: () => stepFind(-1),
+    clearFind: () => runFind(''),
+    get findQuery() {
+      return find.query
+    },
     /** Where the reader is (page, position on it, zoom), to restore when the view reopens. */
     getPlace: () => (view.pages.length ? { ...readAnchor(), zoom: view.zoom } : null),
     /** Opens the next document at `place` instead of the top. */

@@ -4,7 +4,7 @@
   "execution": "trusted-worker",
   "id": "latex-preview",
   "name": "LaTeX Preview",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "description": "Adds PDF and Editor | PDF views to .tex files: the compiled document, or the source and the PDF side by side, rebuilt as you type, with source and PDF jumps, autocomplete and an outline.",
   "author": {
     "name": "shakedm100",
@@ -13,8 +13,9 @@
   "repository": "https://github.com/shakedm100/orca-latex-preview",
   "homepage": "https://github.com/shakedm100/orca-latex-preview",
   "license": "MIT",
+  "icon": "images/icon.png",
   "engines": {
-    "orca": ">=1.4.246"
+    "orca": ">=1.4.248"
   },
   "pluginApi": 1,
   "main": "worker/main.mjs",
@@ -61,6 +62,13 @@
         "default": 400,
         "minimum": 0,
         "maximum": 10000
+      },
+      {
+        "key": "precompilePreamble",
+        "title": "Precompile the preamble",
+        "description": "pdfLaTeX only. Saves the part before \\begin{document} as a format file and starts each build from it, so packages are not loaded again on every keystroke. Needs the mylatexformat package (part of a full TeX Live); without it, or when the preamble cannot be saved this way, builds run as usual.",
+        "type": "boolean",
+        "default": true
       },
       {
         "key": "outDir",
@@ -114,6 +122,9 @@
   "capabilities": [
     {
       "kind": "workspace:read"
+    },
+    {
+      "kind": "workspace:write"
     },
     {
       "kind": "storage:own"

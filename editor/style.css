@@ -44,6 +44,13 @@ body[data-mode='split'] .app { grid-template-columns: var(--split, 50%) 5px minm
 .source .cm-activeLine { background: color-mix(in srgb, var(--fg) 5%, transparent); }
 .source .cm-activeLineGutter { background: color-mix(in srgb, var(--fg) 7%, transparent); color: var(--fg); }
 .source .cm-error-line { background: color-mix(in srgb, var(--danger) 13%, transparent); }
+.source .cm-undefined-key { text-decoration: underline wavy var(--warn); text-underline-offset: 3px; text-decoration-skip-ink: none; }
+.source .cm-tooltip-hover { max-width: min(460px, 90vw); }
+.cm-latex-hover { padding: 6px 9px; display: flex; flex-direction: column; gap: 2px; font: 12px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif; }
+.cm-latex-hover .title { font-weight: 600; }
+.cm-latex-hover .warn { color: var(--warn); }
+.cm-latex-hover .muted { color: var(--muted); font-size: 11px; }
+.source .cm-foldPlaceholder { background: var(--card); border: 1px solid var(--border); color: var(--muted); padding: 0 4px; border-radius: 3px; }
 .source .cm-flash-line { background: color-mix(in srgb, var(--primary) 22%, transparent); transition: background 0.8s; }
 
 /* ---- toolbar */
@@ -136,7 +143,7 @@ button.primary svg { fill: currentColor; stroke: none; }
 .popover .item .where { color: var(--muted); font-size: 11px; margin-left: 6px; }
 .popover .empty-note { padding: 8px 10px; color: var(--muted); }
 .preview { position: relative; }
-.toast { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 15; padding: 6px 12px; border-radius: var(--radius); background: var(--orca-popover, var(--card)); border: 1px solid var(--border); box-shadow: 0 4px 14px rgba(0,0,0,.25); white-space: nowrap; }
+.toast { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 15; padding: 6px 12px; max-width: calc(100% - 24px); white-space: normal !important; text-align: center; border-radius: var(--radius); background: var(--orca-popover, var(--card)); border: 1px solid var(--border); box-shadow: 0 4px 14px rgba(0,0,0,.25); white-space: nowrap; }
 
 /* ---- missing requirements: what to install */
 .requirements { flex: none; max-height: 45%; overflow: auto; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--warn) 10%, var(--bg)); }
@@ -146,3 +153,22 @@ button.primary svg { fill: currentColor; stroke: none; }
 .requirement .detail { line-height: 1.45; }
 .requirement .command { display: flex; align-items: center; gap: 6px; }
 .requirement code { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px; padding: 4px 7px; border-radius: var(--radius); background: var(--card); border: 1px solid var(--border); white-space: pre-wrap; word-break: break-word; user-select: text; }
+
+/* ---- selectable text over the PDF (pdf.js text layer rules) */
+.textLayer { position: absolute; text-align: initial; inset: 0; overflow: clip; opacity: 1; line-height: 1; text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0; caret-color: CanvasText; z-index: 0; }
+.textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
+.textLayer > :not(.markedContent), .textLayer .markedContent span:not(.markedContent) { z-index: 1; }
+.textLayer span.markedContent { top: 0; height: 0; }
+.textLayer span[role='img'] { user-select: none; cursor: default; }
+.textLayer ::selection { background: rgba(0, 90, 255, 0.28); }
+.textLayer br::selection { background: transparent; }
+.textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; }
+.textLayer.selecting .endOfContent { top: 0; }
+
+/* ---- find in PDF */
+.findbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--border); background: var(--card); }
+.findbar input { flex: 1; min-width: 60px; max-width: 320px; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); height: 24px; padding: 0 7px; }
+.findbar input:focus { outline: 2px solid var(--orca-ring, var(--primary)); outline-offset: 0; border-color: transparent; }
+#findCount { font-variant-numeric: tabular-nums; min-width: 5em; }
+.find-hit { position: absolute; pointer-events: none; border-radius: 2px; background: rgba(255, 200, 0, 0.35); z-index: 1; mix-blend-mode: multiply; }
+.find-hit.current { background: rgba(255, 120, 0, 0.55); outline: 1px solid rgba(220, 90, 0, 0.9); }

@@ -23,7 +23,14 @@ const els = {
   empty: $('empty'),
   words: $('words'),
   outlineToggle: $('outlineToggle'),
-  outline: $('outline')
+  outline: $('outline'),
+  findToggle: $('findToggle'),
+  findBar: $('findBar'),
+  findInput: $('findInput'),
+  findCount: $('findCount'),
+  findPrev: $('findPrev'),
+  findNext: $('findNext'),
+  findClose: $('findClose')
 }
 
 const request = (name, input = {}, timeoutMs = 30000) =>
@@ -76,7 +83,8 @@ const viewer = createViewer({
     els.empty.hidden = true
     els.download.disabled = false
   },
-  onDoubleClick: (point) => void syncInverse(point)
+  onDoubleClick: (point) => void syncInverse(point),
+  onFind: (result) => showFindResult(result)
 })
 
 const app = {
@@ -131,7 +139,8 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
 
 // ------------------------------------------------------------------ reading position
 // Orca rebuilds the view when its tab comes back, so the place in the PDF and in the source is
-// kept per file (and per view) in this plugin's own localStorage.
+// kept per file (and per view) in this plugin's own localStorage, with the split between the
+// source and the PDF. A file seen for the first time starts from the last split used anywhere.
 
 const placeKey = () => (app.file ? `place:${MODE}:${app.file}` : null)
 
@@ -141,7 +150,8 @@ function savePlace() {
   try {
     // Until the PDF is on screen there is no PDF position yet: keep the stored one.
     const before = JSON.parse(localStorage.getItem(key) ?? 'null')
-    const place = { pdf: viewer.getPlace() ?? before?.pdf ?? null, source: app.editor?.getPlace() ?? null, at: Date.now() }
+    const split = MODE === 'split' ? parseFloat(document.getElementById('app').style.getPropertyValue('--split')) || null : null
+    const place = { pdf: viewer.getPlace() ?? before?.pdf ?? null, source: app.editor?.getPlace() ?? null, split, at: Date.now() }
     if (!place.pdf && !place.source) return
     localStorage.setItem(key, JSON.stringify(place))
   } catch {
@@ -158,6 +168,7 @@ function restorePlace() {
   }
   if (!place) return
   if (place.pdf) viewer.setPlace(place.pdf)
+  if (place.split && app.applySplit) app.applySplit(place.split)
   if (place.source && app.editor) app.editor.setPlace(place.source)
 }
 
@@ -209,6 +220,7 @@ async function attach(choice) {
     app.relToRoot = answer.relToRoot
     els.compile.disabled = false
     applyState(answer.state)
+    if (answer.jump) jumpToLine(answer.jump.line)
     return true
   })()
   try {
@@ -303,10 +315,11 @@ async function recompile() {
 
 function applyState(state) {
   if (!state) return
+  if (state.jump) jumpToLine(state.jump.line)
   app.state = state
   app.since = state.version
   const result = state.result
-  const engine = result?.usedLatexmk ? `latexmk with ${state.engine}` : state.engine
+  const engine = (result?.usedLatexmk ? `latexmk with ${state.engine}` : state.engine) + (result?.usedPreamble ? ', precompiled preamble' : '')
   if (state.status === 'compiling' || (state.status === 'idle' && !result)) {
     setStatus('compiling', `Compiling ${state.name}…`, `${state.root}\n${engine}`)
   } else if (result) {
@@ -432,10 +445,14 @@ function renderIssues(result) {
     message.textContent = issue.message
     body.append(where, message)
     row.append(dot, body)
-    if (app.editor && issue.line && issueTargetsThisFile(issue)) {
+    if (issue.line && issueTargetsThisFile(issue)) {
       row.classList.add('jump')
-      row.title = `Go to line ${issue.line}`
-      row.addEventListener('click', () => app.editor.goToLine(issue.line))
+      row.title = app.editor ? `Go to line ${issue.line}` : `Show line ${issue.line} in the PDF`
+      row.addEventListener('click', () => (app.editor ? app.editor.goToLine(issue.line) : void syncForward(app.relToRoot, issue.line)))
+    } else if (issue.line && issue.file && isProjectFile(issue.file)) {
+      row.classList.add('jump')
+      row.title = `Open ${issue.file} at line ${issue.line}`
+      row.addEventListener('click', () => void openSource(issue.file, issue.line))
     }
     els.issues.append(row)
   }
@@ -475,6 +492,7 @@ async function refreshProject() {
   } catch {
     return
   }
+  app.editor?.projectChanged()
   const words = app.project.words ?? 0
   els.words.hidden = !words
   els.words.textContent = `${words.toLocaleString()} words`
@@ -512,6 +530,7 @@ function renderOutline() {
     button.addEventListener('click', () => {
       closeOutline()
       if (app.editor && rel === app.relToRoot) app.editor.goToLine(item.line)
+      else if (app.editor) void openSource(rel, item.line)
       void syncForward(rel, item.line)
     })
     list.append(button)
@@ -577,9 +596,36 @@ async function syncInverse(point) {
     const hit = await request('latex.syncInverse', { sessionId: app.sessionId, ...point })
     if (!hit) return
     if (hit.thisFile && app.editor) app.editor.flashLine(hit.line)
-    else toast(`${hit.rel}, line ${hit.line}`)
+    else if (hit.thisFile) toast(`${hit.rel}, line ${hit.line}`)
+    else void openSource(hit.rel, hit.line)
   } catch (error) {
     toast(`Could not map that point to the source: ${error.message}`)
+  }
+}
+
+/** A project file other than this one: relative to the main file's folder, not an absolute path. */
+function isProjectFile(file) {
+  const name = slashes(file)
+  return !/^(?:[A-Za-z]:)?\//.test(name) && !name.startsWith('../')
+}
+
+/** This view's file at `line`: the cursor in the source, or the spot in the PDF. */
+function jumpToLine(line) {
+  if (app.editor) app.editor.flashLine(line)
+  else void syncForward(app.relToRoot, line)
+}
+
+/** Opens another file of the project in Orca; a LaTeX view of it then moves to `line`. */
+async function openSource(file, line) {
+  try {
+    const answer = await request('latex.open', { sessionId: app.sessionId, file, line })
+    if (answer.opened) toast(`Opened ${answer.rel}, line ${line}`)
+    else if (answer.reason === 'outside') toast(`${file}, line ${line} (outside this workspace)`)
+    else if (answer.reason === 'unsupported' || answer.reason === 'permission_denied' || answer.reason === 'capability_denied') {
+      toast(`${file}, line ${line}. To open it from here, allow the plugin to open files in Settings → Plugins.`)
+    } else toast(`${file}, line ${line}${answer.message ? ` (could not open it: ${answer.message})` : ''}`)
+  } catch (error) {
+    toast(`${file}, line ${line} (could not open it: ${error.message})`)
   }
 }
 
@@ -612,6 +658,56 @@ async function loadPdf(rev, chunks, size) {
   }
 }
 
+// ------------------------------------------------------------------ find in PDF
+
+function showFindResult({ query, count, index, capped }) {
+  if (!query.trim()) els.findCount.textContent = ''
+  else if (!count) els.findCount.textContent = 'No matches'
+  else els.findCount.textContent = `${index + 1} of ${count.toLocaleString()}${capped ? '+' : ''}`
+  els.findInput.classList.toggle('none', Boolean(query.trim()) && !count)
+  els.findPrev.disabled = els.findNext.disabled = count < 2
+}
+
+function openFind() {
+  els.findBar.hidden = false
+  els.findToggle.setAttribute('aria-expanded', 'true')
+  // Start from the text selected in the PDF, if any.
+  const selected = window.getSelection()?.toString().trim()
+  if (selected && selected.length < 200 && els.viewer.contains(window.getSelection().anchorNode)) els.findInput.value = selected
+  els.findInput.focus()
+  els.findInput.select()
+  if (els.findInput.value) void viewer.find(els.findInput.value)
+}
+
+function closeFind() {
+  els.findBar.hidden = true
+  els.findToggle.setAttribute('aria-expanded', 'false')
+  void viewer.clearFind()
+  els.viewer.focus()
+}
+
+let findTimer = 0
+els.findInput.addEventListener('input', () => {
+  clearTimeout(findTimer)
+  findTimer = setTimeout(() => void viewer.find(els.findInput.value), 200)
+})
+els.findInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    clearTimeout(findTimer)
+    if (viewer.findQuery !== els.findInput.value) void viewer.find(els.findInput.value)
+    else if (event.shiftKey) viewer.findPrevious()
+    else viewer.findNext()
+  } else if (event.key === 'Escape') {
+    event.preventDefault()
+    closeFind()
+  }
+})
+els.findToggle.addEventListener('click', () => (els.findBar.hidden ? openFind() : closeFind()))
+els.findPrev.addEventListener('click', () => viewer.findPrevious())
+els.findNext.addEventListener('click', () => viewer.findNext())
+els.findClose.addEventListener('click', closeFind)
+
 // ------------------------------------------------------------------ controls
 
 els.compile.addEventListener('click', () => void recompile())
@@ -642,6 +738,11 @@ window.addEventListener(
       event.preventDefault()
       event.stopPropagation()
       void recompile()
+    } else if (!app.editor?.hasFocus() && !event.altKey && (event.key === 'f' || event.key === 'F')) {
+      // In the source, Ctrl+F is CodeMirror's own search; anywhere else it finds in the PDF.
+      event.preventDefault()
+      event.stopPropagation()
+      openFind()
     } else if (!app.editor?.hasFocus() && (event.key === '=' || event.key === '+')) {
       event.preventDefault()
       viewer.stepZoom(1)
@@ -696,6 +797,7 @@ function setupDivider() {
     if (event.key === 'ArrowLeft') apply(current - 2)
     if (event.key === 'ArrowRight') apply(current + 2)
   })
+  return apply
 }
 
 // ------------------------------------------------------------------ start
@@ -706,7 +808,7 @@ async function start() {
     return
   }
   if (MODE === 'split') {
-    setupDivider()
+    app.applySplit = setupDivider()
     const { createSourceEditor } = await import('./source-editor.js')
     app.doc = await orca.document.session({ debounceMs: 200 })
     app.editor = createSourceEditor(els.source, {

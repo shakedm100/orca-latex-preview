@@ -10,6 +10,7 @@ import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { compileDocument, GENERATED } from './compile.mjs'
+import { createPreambleCache } from './preamble.mjs'
 import { chooseEngine, resolveRoot, scanTex } from './discover.mjs'
 import { scanProject } from './project.mjs'
 import { createSynctex, samePath } from './synctex.mjs'
@@ -52,6 +53,7 @@ export default async function activate(orca) {
   /** @type {Map<string, any>} session id -> { id, file, build, lastSeen } */
   const sessions = new Map()
   let pdfRev = 0
+  const preambleCache = createPreambleCache()
 
   // ------------------------------------------------------------------ workspaces and files
 
@@ -172,6 +174,7 @@ export default async function activate(orca) {
             produced: r.produced,
             durationMs: r.durationMs,
             usedLatexmk: r.usedLatexmk,
+            usedPreamble: r.usedPreamble ?? false,
             issues: r.issues,
             requirements: r.requirements ?? [],
             logTail: r.logTail.slice(-8000)
@@ -200,6 +203,7 @@ export default async function activate(orca) {
       root,
       rootDir,
       projectDir,
+      workspace: workspace ?? null,
       cacheDir,
       overlayDir: path.join(cacheDir, 'overlay'),
       outDir: outSetting ? path.resolve(rootDir, outSetting) : path.join(cacheDir, 'out'),
@@ -290,6 +294,7 @@ export default async function activate(orca) {
         outDir: build.outDir,
         overlayDir: build.overlayDir,
         shellEscape: await setting('shellEscape', false),
+        preambleCache: (await setting('precompilePreamble', true)) ? preambleCache : null,
         signal: build.abort.signal
       })
       if (!builds.has(build.root)) return
@@ -475,12 +480,16 @@ export default async function activate(orca) {
       scheduleBuild(build, 0)
     }
     orca.log(`attached ${file} (main ${root})`)
+    const pending = pendingJumps.get(path.normalize(file))
+    pendingJumps.delete(path.normalize(file))
+    for (const [key, jump] of pendingJumps) if (Date.now() - jump.at > JUMP_TTL_MS) pendingJumps.delete(key)
     return {
       sessionId: session.id,
       file,
       rel: workspace ? path.relative(workspace.path, file) : path.basename(file),
       relToRoot: path.relative(path.dirname(root), file).split(path.sep).join('/'),
-      state: snapshot(build)
+      state: snapshot(build),
+      jump: pending && Date.now() - pending.at < JUMP_TTL_MS ? { line: pending.line } : null
     }
   })
 
@@ -513,7 +522,43 @@ export default async function activate(orca) {
       })
     }
     session.lastSeen = Date.now()
-    return snapshot(build)
+    const state = snapshot(build)
+    if (session.jump) {
+      state.jump = session.jump
+      session.jump = null
+    }
+    return state
+  })
+
+  // A jump to a line of another file (from the PDF, an issue, the outline): Orca opens the file,
+  // and a LaTeX view of it moves to the line, whether already open or opened within a minute.
+  const pendingJumps = new Map() // absolute file -> { line, at }
+  const JUMP_TTL_MS = 60_000
+
+  orca.panels.handle('latex.open', async ({ sessionId, file, line }) => {
+    const session = sessionOf(sessionId)
+    const build = session.build
+    const target = path.resolve(build.rootDir, String(file))
+    const lineNumber = Math.max(1, Number(line) || 1)
+    let notified = false
+    for (const other of sessions.values()) {
+      if (other !== session && samePath(other.file, target)) {
+        other.jump = { line: lineNumber, at: Date.now() }
+        notified = true
+      }
+    }
+    if (notified) changed(build)
+    else pendingJumps.set(path.normalize(target), { line: lineNumber, at: Date.now() })
+    const workspace = build.workspace ?? (await workspaceFor(target))
+    const rel = workspace ? path.relative(workspace.path, target) : null
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return { opened: false, reason: 'outside', rel: path.basename(target) }
+    if (!orca.host.has('editor.open')) return { opened: false, reason: 'unsupported', rel }
+    try {
+      await orca.host.call('editor.open', { workspaceId: workspace.id, path: rel.split(path.sep).join('/') })
+      return { opened: true, rel }
+    } catch (error) {
+      return { opened: false, reason: error.code ?? 'failed', message: error.message, rel }
+    }
   })
 
   orca.panels.handle('latex.compile', async ({ sessionId }) => {

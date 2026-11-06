@@ -5,7 +5,7 @@ import { access, constants, readdir } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-const NAMES = ['latexmk', 'pdflatex', 'xelatex', 'lualatex', 'bibtex', 'biber', 'tlmgr', 'miktex', 'mpm']
+const NAMES = ['latexmk', 'pdflatex', 'xelatex', 'lualatex', 'bibtex', 'biber', 'kpsewhich', 'tlmgr', 'miktex', 'mpm']
 const isWindows = process.platform === 'win32'
 const isMac = process.platform === 'darwin'
 const home = os.homedir()

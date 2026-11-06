@@ -15,12 +15,50 @@ function normaliseFile(file) {
   return file.replace(/^\.\//, '')
 }
 
+// TeX writes `(file` when it starts reading a file and `)` when it is done, so the innermost
+// open file is the one a warning or a line number belongs to.
+const OPEN_FILE = /^\("?((?:\.{1,2}[\\/]|[\\/]|[A-Za-z]:[\\/])[^()"\n]*?|[^()"\s]+?\.(?:tex|ltx|sty|cls|clo|cfg|def|fd|aux|bbl|toc|lof|lot|out|nav|snm|ind|gls|dtx|lua|code\.tex))(?="|\)|\s|$)/i
+const QUOTED_FILE = /^\("([^"\n]+)"/
+const EXTENSION = /\.[A-Za-z0-9]{1,12}$/
+
+/** For each line of the log, the file TeX was reading when that line started (or null). */
+export function filesByLine(lines) {
+  const stack = []
+  const current = () => {
+    for (let i = stack.length - 1; i >= 0; i -= 1) if (stack[i]) return stack[i]
+    return null
+  }
+  const result = new Array(lines.length)
+  for (let i = 0; i < lines.length; i += 1) {
+    result[i] = current()
+    const line = lines[i]
+    for (let at = 0; at < line.length; at += 1) {
+      const char = line[at]
+      if (char === '(') {
+        const rest = line.slice(at)
+        // TeX quotes a name with spaces: ("C:/My Thesis/main.tex"
+        const match = QUOTED_FILE.exec(rest) ?? OPEN_FILE.exec(rest)
+        const name = match?.[1].trim()
+        if (name && EXTENSION.test(name)) {
+          stack.push(name)
+          at += match[0].length - 1
+        } else stack.push(null)
+      } else if (char === ')') {
+        stack.pop()
+      }
+    }
+  }
+  return result
+}
+
 /**
  * @param {string} log
  * @returns {{ severity: 'error' | 'warning' | 'badbox', file: string | null, line: number | null, message: string }[]}
  */
 export function parseLog(log) {
   const lines = log.split(/\r?\n/)
+  const fileAt = filesByLine(lines)
+  const sourceAt = (i) => (fileAt[i] ? normaliseFile(fileAt[i]) : null)
   const issues = []
   const seen = new Set()
   const push = (issue) => {
@@ -58,7 +96,7 @@ export function parseLog(log) {
           break
         }
       }
-      push({ severity: 'error', file: null, line, message: match[1].trim() })
+      push({ severity: 'error', file: line ? sourceAt(i) : null, line, message: match[1].trim() })
       continue
     }
 
@@ -77,7 +115,7 @@ export function parseLog(log) {
       const source = match[2] && match[1] !== 'LaTeX' ? `${match[2]}: ` : ''
       push({
         severity: 'warning',
-        file: null,
+        file: where ? sourceAt(i) : null,
         line: where ? Number(where[1]) : null,
         message: `${source}${message.replace(/\s*on input line \d+\.?/, '')}`
       })
@@ -87,7 +125,7 @@ export function parseLog(log) {
     match = BADBOX.exec(text)
     if (match && /^(Overfull|Underfull)/.test(text)) {
       const line = match[2] ?? match[3]
-      push({ severity: 'badbox', file: null, line: line ? Number(line) : null, message: match[1].trim() })
+      push({ severity: 'badbox', file: line ? sourceAt(i) : null, line: line ? Number(line) : null, message: match[1].trim() })
     }
   }
 

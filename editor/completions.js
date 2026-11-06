@@ -122,6 +122,18 @@ const ENVIRONMENTS = [
 const PACKAGES =
   'amsmath amssymb amsthm mathtools graphicx hyperref cleveref xcolor geometry booktabs tabularx longtable multirow array siunitx enumitem caption subcaption float listings minted tikz pgfplots biblatex natbib inputenc fontenc babel polyglossia fontspec microtype lmodern setspace fancyhdr titlesec parskip csquotes url algorithm algorithmic algpseudocode xspace todonotes lipsum blindtext appendix makeidx glossaries acronym import standalone tcolorbox mdframed'.split(' ')
 
+// Whole blocks, offered when their name starts a line.
+const BLOCKS = [
+  ['figure', '\\begin{figure}[htbp]\n\t\\centering\n\t\\includegraphics[width=0.8\\linewidth]{${file}}\n\t\\caption{${caption}}\n\t\\label{fig:${label}}\n\\end{figure}', 'figure block'],
+  ['table', '\\begin{table}[htbp]\n\t\\centering\n\t\\caption{${caption}}\n\t\\label{tab:${label}}\n\t\\begin{tabular}{${ll}}\n\t\t\\toprule\n\t\t${A} & ${B} \\\\\n\t\t\\midrule\n\t\t${} \\\\\n\t\t\\bottomrule\n\t\\end{tabular}\n\\end{table}', 'table block (booktabs)'],
+  ['equation', '\\begin{equation}\n\t${}\n\t\\label{eq:${label}}\n\\end{equation}', 'numbered equation'],
+  ['align', '\\begin{align}\n\t${a} &= ${b} \\\\\n\t${c} &= ${d}\n\\end{align}', 'aligned equations'],
+  ['itemize', '\\begin{itemize}\n\t\\item ${}\n\\end{itemize}', 'bulleted list'],
+  ['enumerate', '\\begin{enumerate}\n\t\\item ${}\n\\end{enumerate}', 'numbered list'],
+  ['subfigures', '\\begin{figure}[htbp]\n\t\\centering\n\t\\begin{subfigure}{0.48\\linewidth}\n\t\t\\includegraphics[width=\\linewidth]{${left}}\n\t\t\\caption{${}}\n\t\\end{subfigure}\n\t\\hfill\n\t\\begin{subfigure}{0.48\\linewidth}\n\t\t\\includegraphics[width=\\linewidth]{${right}}\n\t\t\\caption{${}}\n\t\\end{subfigure}\n\t\\caption{${caption}}\n\t\\label{fig:${label}}\n\\end{figure}', 'two figures side by side (subcaption)'],
+  ['frame', '\\begin{frame}{${title}}\n\t${}\n\\end{frame}', 'beamer slide']
+]
+
 // Completions replace the typed backslash too, so each one writes it back.
 const commandOptions = COMMANDS.map(([name, snippet, detail]) => snippetCompletion(`\\${snippet}`, { label: `\\${name}`, detail, type: 'function' }))
   .concat(GREEK.map((name) => ({ label: `\\${name}`, apply: `\\${name}`, detail: 'Greek letter', type: 'constant' })))
@@ -166,7 +178,7 @@ export function latexCompletions(getProject) {
       const options = (project.citations ?? []).map((entry) => ({
         label: entry.key,
         detail: [entry.author.split(/\s+and\s+/)[0]?.split(',')[0], entry.year].filter(Boolean).join(' '),
-        info: entry.title || undefined,
+        info: [entry.title, entry.venue].filter(Boolean).join('\n') || undefined,
         type: 'text'
       }))
       return { from, options, validFor: /^[^},]*$/ }
@@ -217,6 +229,20 @@ export function latexCompletions(getProject) {
       const bare = match.text.startsWith('\\bibliography')
       const files = (project.files?.bib ?? []).map((file) => (bare ? file.replace(/\.bib$/, '') : file))
       return { from: match.from + match.text.lastIndexOf('{') + 1, options: files.map((file) => ({ label: file, type: 'text' })), validFor: /^[^}]*$/ }
+    }
+
+    // A block name typed alone at the start of a line (fig, tab, eq, item...) offers the whole block.
+    match = context.matchBefore(/^\s*[a-z]{3,}$/)
+    if (match) {
+      const word = match.text.trim()
+      const options = BLOCKS.filter(([name]) => name.startsWith(word))
+      if (options.length) {
+        return {
+          from: match.to - word.length,
+          options: options.map(([name, body, detail]) => snippetCompletion(body, { label: name, detail, type: 'keyword', boost: -10 })),
+          validFor: /^[a-z]*$/
+        }
+      }
     }
 
     // Commands.
