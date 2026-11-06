@@ -24,7 +24,7 @@ export function parseSynctex(text) {
   const pages = new Map() // page -> records
   let page = 0
   let records = null
-  for (const line of text.split('\n')) {
+  for (const line of text.split(/\r?\n/)) {
     if (line.startsWith('Input:')) {
       const match = /^Input:(\d+):(.*)$/.exec(line)
       if (match) inputs.set(Number(match[1]), match[2])

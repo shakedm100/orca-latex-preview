@@ -151,7 +151,9 @@ async function compileOnce(options, format) {
     toolError = `${options.engine} is not installed.`
   } else if (options.useLatexmk && options.tools.latexmk) {
     const flag = { pdflatex: '-pdf', xelatex: '-pdfxe', lualatex: '-pdflua' }[options.engine]
-    const args = [flag, '-f', ...common.filter((arg) => !arg.startsWith('-output-directory'))]
+    // -g: the plugin builds only when something changed, but latexmk cannot see every change
+    // (a file switching to its unsaved copy in the overlay folder looks unchanged to it).
+    const args = [flag, '-f', '-g', ...common.filter((arg) => !arg.startsWith('-output-directory'))]
     // latexmk runs this command line for pdfLaTeX, with its own options (%O) and the file (%S).
     if (format) args.push(`-pdflatex="${engineCommand}" -fmt=${format.name} %O %S`)
     if (outDir !== dir) args.push(`-outdir=${outDir}`)
