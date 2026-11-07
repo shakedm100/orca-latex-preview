@@ -115,6 +115,13 @@
         "default": false
       },
       {
+        "key": "trustProjectLatexmkrc",
+        "title": "Run the project's latexmkrc",
+        "description": "Let latexmk run a latexmkrc or .latexmkrc in the document's folder. It is Perl that runs on your machine whenever the document builds, so enable it only for projects you trust. Your own ~/.latexmkrc is always read.",
+        "type": "boolean",
+        "default": false
+      },
+      {
         "key": "texBinDir",
         "title": "Extra TeX bin folder",
         "description": "Searched before PATH, for a TeX Live that is not on Orca's PATH.",
