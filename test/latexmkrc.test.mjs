@@ -22,8 +22,9 @@ test("skips a project's latexmkrc and reads back the user's and the system's", (
 })
 
 test('treats .latexmkrc the same and honours XDG_CONFIG_HOME', () => {
-  const exists = fs(path.join(dir, '.latexmkrc'), '/xdg/latexmk/latexmkrc')
-  assert.deepEqual(latexmkRcArgs({ dir, trustProjectRc: false, home, env: { XDG_CONFIG_HOME: '/xdg' }, exists }), ['-norc', '-r', '/xdg/latexmk/latexmkrc'])
+  const xdgRc = path.join('/xdg', 'latexmk', 'latexmkrc')
+  const exists = fs(path.join(dir, '.latexmkrc'), xdgRc)
+  assert.deepEqual(latexmkRcArgs({ dir, trustProjectRc: false, home, env: { XDG_CONFIG_HOME: '/xdg' }, exists }), ['-norc', '-r', xdgRc])
 })
 
 test('runs the project rc file when the user trusts it', () => {
