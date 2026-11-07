@@ -294,6 +294,7 @@ export default async function activate(orca) {
         outDir: build.outDir,
         overlayDir: build.overlayDir,
         shellEscape: await setting('shellEscape', false),
+        trustProjectLatexmkrc: await setting('trustProjectLatexmkrc', false),
         preambleCache: (await setting('precompilePreamble', true)) ? preambleCache : null,
         signal: build.abort.signal
       })

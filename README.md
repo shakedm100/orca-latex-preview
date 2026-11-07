@@ -134,6 +134,7 @@ the system's TeX; the view says so and suggests TinyTeX in your home folder.
 | Output folder | empty | Relative to the main file; empty uses Orca's cache |
 | Precompile the preamble | on | pdfLaTeX with mylatexformat; otherwise ignored |
 | Allow shell escape | off | Needed by minted; lets the document run commands |
+| Run the project's latexmkrc | off | Lets latexmk run a `latexmkrc` in the document's folder (Perl); your own `~/.latexmkrc` is always read |
 | Extra TeX bin folder | empty | Searched before PATH |
 
 ## Limitations

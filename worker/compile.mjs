@@ -3,6 +3,7 @@
 import { spawn } from 'node:child_process'
 import { mkdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
+import { latexmkRcArgs } from './latexmkrc.mjs'
 import { needsRerun, parseLog } from './logparse.mjs'
 import { findRequirements } from './requirements.mjs'
 
@@ -63,6 +64,7 @@ async function exists(file) {
  * @param {string} options.outDir      absolute output folder
  * @param {string} [options.overlayDir] folder searched before the project: unsaved editor buffers
  * @param {boolean} options.shellEscape
+ * @param {boolean} [options.trustProjectLatexmkrc] let latexmk run a latexmkrc in the document's folder
  * @param {ReturnType<import('./preamble.mjs').createPreambleCache>} [options.preambleCache]  precompiled preambles, when on
  * @param {AbortSignal} [options.signal]
  */
@@ -153,7 +155,8 @@ async function compileOnce(options, format) {
     const flag = { pdflatex: '-pdf', xelatex: '-pdfxe', lualatex: '-pdflua' }[options.engine]
     // -g: the plugin builds only when something changed, but latexmk cannot see every change
     // (a file switching to its unsaved copy in the overlay folder looks unchanged to it).
-    const args = [flag, '-f', '-g', ...common.filter((arg) => !arg.startsWith('-output-directory'))]
+    const rc = latexmkRcArgs({ dir, trustProjectRc: Boolean(options.trustProjectLatexmkrc) })
+    const args = [...rc, flag, '-f', '-g', ...common.filter((arg) => !arg.startsWith('-output-directory'))]
     // latexmk runs this command line for pdfLaTeX, with its own options (%O) and the file (%S).
     if (format) args.push(`-pdflatex="${engineCommand}" -fmt=${format.name} %O %S`)
     if (outDir !== dir) args.push(`-outdir=${outDir}`)
