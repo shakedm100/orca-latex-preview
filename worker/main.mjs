@@ -11,6 +11,7 @@ import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { compileDocument, GENERATED } from './compile.mjs'
+import { inputsDigest } from './inputs.mjs'
 import { createPreambleCache } from './preamble.mjs'
 import { chooseEngine, resolveRoot, scanTex } from './discover.mjs'
 import { scanProject } from './project.mjs'
@@ -389,9 +390,18 @@ export default async function activate(orca) {
     build.upload = { state: 'syncing', host, file: rel, rev: pdf.rev }
     changed(build)
     try {
-      await remote.upload({ hostId: workspace.remote.hostId, remoteFile: path.posix.join(workspace.remote.path, rel), bytes: pdf.bytes, signal: build.abort.signal })
-      build.upload = { state: 'synced', host, file: rel, rev: pdf.rev, at: Date.now() }
-      orca.log(`uploaded ${rel} to ${host}`)
+      const hostId = workspace.remote.hostId
+      const remoteFile = path.posix.join(workspace.remote.path, rel)
+      // Built from the same files as the PDF last put there, which is still there: nothing to send.
+      const last = pdf.inputs ? await remote.uploadRecord(hostId, remoteFile) : null
+      if (last?.inputs === pdf.inputs && (await remote.remoteSize({ hostId, remoteFile, signal: build.abort.signal })) === last.size) {
+        build.upload = { state: 'synced', host, file: rel, rev: pdf.rev, at: last.at, unchanged: true }
+      } else {
+        await remote.upload({ hostId, remoteFile, bytes: pdf.bytes, signal: build.abort.signal })
+        if (pdf.inputs) await remote.rememberUpload(hostId, remoteFile, { inputs: pdf.inputs, size: pdf.bytes.length })
+        build.upload = { state: 'synced', host, file: rel, rev: pdf.rev, at: Date.now() }
+        orca.log(`uploaded ${rel} to ${host}`)
+      }
     } catch (error) {
       build.upload = { state: 'failed', host, file: rel, rev: pdf.rev, message: error.message }
       orca.log(`upload of ${rel} to ${host} failed: ${error.message}`)
@@ -486,6 +496,17 @@ export default async function activate(orca) {
       if (result.pdfPath && (!build.pdf || build.pdf.mtime !== result.pdfMtime)) {
         pdfRev += 1
         build.pdf = { rev: pdfRev, mtime: result.pdfMtime, bytes: await readFile(result.pdfPath), sources }
+        if (build.workspace?.remote) {
+          // What it was built from, so an upload of a PDF from the same files can be skipped.
+          build.pdf.inputs = await inputsDigest({
+            flsPath: result.pdfPath.replace(/\.pdf$/, '.fls'),
+            projectDir: build.projectDir,
+            rootDir: build.rootDir,
+            overlayDir: build.overlayDir,
+            outDir: build.outDir,
+            extra: build.engine
+          }).catch(() => null)
+        }
       }
       build.status = result.ok ? 'ok' : result.produced ? 'warnings' : 'failed'
       // Spelled out in the plugin log too, for anyone (or any agent) reading `orca plugin logs`.

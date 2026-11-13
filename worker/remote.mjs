@@ -506,11 +506,36 @@ export function createRemoteMirror({ cacheRoot, log = () => {} }) {
     }
   }
 
+  /** The size of `remoteFile` on the host, or null when it is missing or unreadable. */
+  async function remoteSize({ hostId, remoteFile, signal }) {
+    const { env, ssh } = await connection(hostId)
+    const result = await run('ssh', [...ssh, `wc -c < ${shellQuote(remoteFile)}`], { env, signal, timeoutMs: 30_000 })
+    const size = Number.parseInt(result.stdout.trim(), 10)
+    return result.code === 0 && Number.isFinite(size) ? size : null
+  }
+
+  // What was last uploaded where, kept across restarts: { [host + file]: { inputs, size, at } }.
+  const uploadsFile = path.join(cacheRoot, 'uploads.json')
+  let uploads = null
+  async function uploadRecord(hostId, remoteFile) {
+    uploads ??= (await readJson(uploadsFile)) ?? {}
+    return uploads[`${hostId}\0${remoteFile}`] ?? null
+  }
+  async function rememberUpload(hostId, remoteFile, record) {
+    uploads ??= (await readJson(uploadsFile)) ?? {}
+    uploads[`${hostId}\0${remoteFile}`] = { ...record, at: Date.now() }
+    // Only the 500 most recent, so the file stays small.
+    const kept = Object.entries(uploads).sort((a, b) => b[1].at - a[1].at).slice(0, 500)
+    uploads = Object.fromEntries(kept)
+    await mkdir(cacheRoot, { recursive: true })
+    await writeFile(uploadsFile, JSON.stringify(uploads)).catch(() => {})
+  }
+
   /** The name Orca shows for an SSH host. */
   async function hostName(hostId) {
     const target = await targetFor(hostId)
     return target.label || target.configHost || target.host
   }
 
-  return { sync, upload, hostName, targetFor }
+  return { sync, upload, remoteSize, uploadRecord, rememberUpload, hostName, targetFor }
 }

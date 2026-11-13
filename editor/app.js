@@ -326,7 +326,12 @@ function syncLabel(upload) {
     case 'syncing':
       return { kind: 'compiling', text: `Syncing to ${upload.host}…`, title: `Writing ${where}` }
     case 'synced':
-      return { text: `Synced to ${upload.host}`, title: `${where} is this PDF (${new Date(upload.at).toLocaleTimeString()})` }
+      return {
+        text: `Synced to ${upload.host}`,
+        title: upload.unchanged
+          ? `${where} was built from these same files (${new Date(upload.at).toLocaleString()}), so it was not sent again`
+          : `${where} is this PDF (${new Date(upload.at).toLocaleTimeString()})`
+      }
     case 'failed':
       return { kind: 'warnings', text: `Not synced to ${upload.host}`, title: upload.message }
     case 'held':

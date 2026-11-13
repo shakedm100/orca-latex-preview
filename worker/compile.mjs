@@ -138,7 +138,8 @@ async function compileOnce(options, format) {
   await mkdir(outDir, { recursive: true })
 
   const env = buildEnv(options, dir)
-  const common = ['-interaction=nonstopmode', '-file-line-error', '-synctex=1']
+  // -recorder lists the files read (<name>.fls), which tells an unchanged build apart (inputs.mjs).
+  const common = ['-interaction=nonstopmode', '-file-line-error', '-synctex=1', '-recorder']
   if (options.shellEscape) common.push('-shell-escape')
   if (outDir !== dir) common.push(`-output-directory=${outDir}`)
 

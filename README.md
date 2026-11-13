@@ -93,7 +93,9 @@ file. A copy no view has used for two weeks is deleted.
 
 The PDF goes back to the host: after a build without errors from saved files, the plugin writes
 it next to the main `.tex` file there (`notebook.pdf` beside `notebook.tex`), replacing the one
-there, so the host's PDF always matches the host's sources. The status line says **Syncing to
+there, so the host's PDF always matches the host's sources. A PDF built from the same files as the
+one already there (going by what TeX read, from its `.fls` record) is not sent again, so opening
+the view or restarting Orca leaves an unchanged PDF, and its git status, alone. The status line says **Syncing to
 server…**, then **Synced to server**, or **Syncs to server on save** while there are unsaved
 edits; after a build with errors it says **Not synced (errors)** and the host keeps the last good
 PDF; a failed upload shows as **Not synced**, with the reason on hover. That PDF is the only
