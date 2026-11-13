@@ -14,7 +14,7 @@ import { compileDocument, GENERATED } from './compile.mjs'
 import { createPreambleCache } from './preamble.mjs'
 import { chooseEngine, resolveRoot, scanTex } from './discover.mjs'
 import { scanProject } from './project.mjs'
-import { createRemoteMirror, listEnvironmentWorkspaces, sshTargetId } from './remote.mjs'
+import { createRemoteMirror, listEnvironmentWorkspaces, pruneStaleCopies, sshTargetId } from './remote.mjs'
 import { createSynctex, samePath } from './synctex.mjs'
 import { detectTools } from './tools.mjs'
 
@@ -25,6 +25,7 @@ const SESSION_TTL_MS = 90_000 // a session that stops polling (its tab closed) i
 const BUILD_LINGER_MS = 60_000 // keep a build's PDF a while so switching views is instant
 const INDEX_TTL_MS = 20_000
 const REMOTE_SYNC_MS = 4_000 // how often a remote build looks for changed files on its host
+const REMOTE_COPY_TTL_MS = 14 * 24 * 60 * 60 * 1000 // a copy of a remote workspace unused this long is deleted
 // Each OS's own cache folder: %LOCALAPPDATA% on Windows, ~/Library/Caches on macOS, XDG elsewhere.
 const CACHE_ROOT = path.join(
   process.platform === 'win32'
@@ -58,6 +59,18 @@ export default async function activate(orca) {
   let pdfRev = 0
   const preambleCache = createPreambleCache()
   const remote = createRemoteMirror({ cacheRoot: CACHE_ROOT, log: (message) => orca.log(message) })
+
+  // Copies of remote workspaces not used for two weeks are deleted, at start and once a day.
+  const pruneRemoteCopies = () =>
+    pruneStaleCopies(path.join(CACHE_ROOT, 'remote'), {
+      maxAgeMs: REMOTE_COPY_TTL_MS,
+      keep: new Set([...builds.values()].map((build) => build.workspace?.remote && build.workspace.path).filter(Boolean))
+    }).then(
+      (removed) => removed.length && orca.log(`deleted ${removed.length} unused copies of remote workspaces`),
+      (error) => orca.log(`cleaning remote copies failed: ${error.message}`)
+    )
+  void pruneRemoteCopies()
+  setInterval(pruneRemoteCopies, 24 * 60 * 60 * 1000).unref?.()
 
   // ------------------------------------------------------------------ workspaces and files
 
@@ -289,7 +302,7 @@ export default async function activate(orca) {
       // seconds, whose changed files reach the watcher like any edit on disk.
       await syncRemote(build.workspace, 'full', build.abort.signal)
       build.remoteTimer = setInterval(() => {
-        if (build.compiling) return
+        if (build.compiling || !isOnScreen(build)) return
         syncRemote(build.workspace, 'full', build.abort.signal).then(
           () => (build.remoteError = null),
           (error) => {
@@ -303,6 +316,11 @@ export default async function activate(orca) {
     builds.set(root, build)
     startWatching(build)
     return build
+  }
+
+  /** Whether a view of the build is visible; a remote build stops copying while none is. */
+  function isOnScreen(build) {
+    return [...build.sessions].some((id) => sessions.get(id)?.visible !== false)
   }
 
   function dropBuild(build) {
@@ -423,6 +441,8 @@ export default async function activate(orca) {
     if (full === build.outDir || full.startsWith(build.outDir + path.sep)) return false
     const name = path.basename(filename).toLowerCase()
     if (name.includes('(busy)') || name.endsWith('~') || name.startsWith('.#') || name.startsWith('.~')) return false
+    // The copy of a remote workspace: its "last used" marker, and rsync's temporary files.
+    if (name.startsWith('.orca-latex-preview') || (build.workspace?.remote && /^\..+\.[a-z0-9]{6}$/.test(name))) return false
     if (name.endsWith('.synctex.gz') || name.endsWith('.run.xml')) return false
     const ext = path.extname(name)
     if (GENERATED.has(ext)) return false
@@ -646,6 +666,18 @@ export default async function activate(orca) {
     build.trigger = 'recompile'
     scheduleBuild(build, 0)
     return snapshot(build)
+  })
+
+  orca.panels.handle('latex.visibility', async ({ sessionId, visible }) => {
+    const session = sessionOf(sessionId)
+    const wasOnScreen = isOnScreen(session.build)
+    session.visible = Boolean(visible)
+    const build = session.build
+    // Back on screen: pick up what changed on the host meanwhile, without waiting for the timer.
+    if (!wasOnScreen && isOnScreen(build) && build.workspace?.remote && !build.compiling) {
+      syncRemote(build.workspace, 'full', build.abort.signal).catch((error) => orca.log(`sync of ${build.workspace.name} failed: ${error.message}`))
+    }
+    return { ok: true }
   })
 
   orca.panels.handle('latex.detach', async ({ sessionId }) => {

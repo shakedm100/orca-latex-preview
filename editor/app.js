@@ -184,7 +184,11 @@ function placeChanged() {
 function trackPlace() {
   document.addEventListener('scroll', placeChanged, { capture: true, passive: true })
   for (const type of ['keyup', 'pointerup']) document.addEventListener(type, placeChanged, true)
-  document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && savePlace())
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') savePlace()
+    // A view out of sight lets the worker stop copying a remote project.
+    if (app.sessionId) request('latex.visibility', { sessionId: app.sessionId, visible: document.visibilityState === 'visible' }).catch(() => {})
+  })
   pruneStoredPlaces()
 }
 
@@ -208,7 +212,7 @@ async function attach(choice) {
   app.attaching = (async () => {
     setStatus('compiling', 'Finding this file in your workspaces…')
     const input = await withText({ ...choice }, app.doc.value)
-    const answer = await request('latex.attach', input, 60000)
+    const answer = await request('latex.attach', input, 120000)
     if (!answer.sessionId) {
       showChoices(answer.candidates, answer.problems)
       return false

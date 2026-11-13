@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { orcaCliCandidates, orcaDataDirs, readSshTargets, rsyncFilters, sshArgs, sshTargetId, tarCommand } from '../worker/remote.mjs'
+import { isSelected, orcaCliCandidates, pruneStaleCopies, orcaDataDirs, readSshTargets, rsyncFilters, sshArgs, sshTargetId, tarCommand } from '../worker/remote.mjs'
 
 test('reads the SSH target id from a workspace host id', () => {
   assert.equal(sshTargetId('ssh:ssh-1793696715423-w26rrp'), 'ssh-1793696715423-w26rrp')
@@ -108,4 +109,34 @@ test('finds the Orca CLI under its Linux name, never GNOME Orca', () => {
   assert.equal(candidates[0], path.join('/home/ada/.config/orca', 'linux-orca-cli-shim', 'orca'))
   assert.ok(candidates.includes(path.join('/usr/bin', 'orca-ide')))
   assert.ok(!candidates.includes(path.join('/usr/bin', 'orca')))
+})
+
+test('prunes only files a copy would have brought', () => {
+  assert.ok(isSelected('docs/notebook.tex', 'tex'))
+  assert.ok(!isSelected('docs/plot.png', 'tex'))
+  assert.ok(isSelected('docs/figures/plot.PNG', 'full'))
+  assert.ok(isSelected('latexmkrc', 'full'))
+  assert.ok(!isSelected('.git/notes.tex', 'full'))
+  assert.ok(!isSelected('node_modules/x/readme.txt', 'full'))
+  assert.ok(!isSelected('docs/notebook.aux', 'full'))
+})
+
+test('deletes copies unused for longer than the limit, keeping those in use', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'olp-copies-'))
+  try {
+    const day = 24 * 60 * 60 * 1000
+    const old = new Date(Date.now() - 30 * day)
+    for (const name of ['stale', 'fresh', 'busy']) {
+      await mkdir(path.join(root, name))
+      await writeFile(path.join(root, name, '.orca-latex-preview-used'), '')
+    }
+    await utimes(path.join(root, 'stale', '.orca-latex-preview-used'), old, old)
+    await utimes(path.join(root, 'busy', '.orca-latex-preview-used'), old, old)
+    const removed = await pruneStaleCopies(root, { maxAgeMs: 14 * day, keep: new Set([path.join(root, 'busy')]) })
+    assert.deepEqual(removed, [path.join(root, 'stale')])
+    assert.ok(!existsSync(path.join(root, 'stale')))
+    assert.ok(existsSync(path.join(root, 'fresh')) && existsSync(path.join(root, 'busy')))
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })

@@ -86,8 +86,11 @@ it cannot tell, it lists the candidates and asks.
 The build always runs on this machine, with its TeX. For a workspace on an SSH host, the plugin
 copies the files a build can read (`.tex`, `.bib`, styles, figures, data files for plots, up to
 50 MB each, skipping hidden folders and `node_modules`) into `~/.cache/orca-latex-preview/remote/`,
-compiles that copy, and copies again every few seconds, so a file saved on the host rebuilds the
-PDF. Unsaved edits come from the editor as usual. Nothing is written on the host.
+compiles that copy, and copies again every few seconds while a view of the document is on
+screen, so a file saved on the host rebuilds the PDF (and one deleted there is deleted from the
+copy). Unsaved edits come from the editor as usual, and Orca saves them to the host as it does any
+file. The plugin writes nothing on the host, and the PDF stays on this machine. A copy no view has
+used for two weeks is deleted.
 
 It connects with your own OpenSSH client (`ssh`, and `rsync` when both machines have it, else
 `tar`), using the host settings Orca saved: a host imported from `~/.ssh/config` is reached by
@@ -173,8 +176,6 @@ the system's TeX; the view says so and suggests TinyTeX in your home folder.
   (see above), which needs `ssh` on this machine and a login that does not prompt. Orca does not
   give plugins a host's connection settings, so the plugin reads the SSH hosts saved in Orca's
   profile; a future Orca that stores them differently would break this until the plugin follows.
-- Files deleted on an SSH host stay in the local copy until you clear
-  `~/.cache/orca-latex-preview/remote/`.
 
 ## Development
 

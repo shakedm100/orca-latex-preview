@@ -4,7 +4,7 @@
 // to reach it, so the connection settings come from the SSH hosts saved in Orca's profile.
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -254,8 +254,8 @@ export function rsyncFilters(scope) {
 
 const shellQuote = (text) => `'${String(text).replace(/'/g, `'\\''`)}'`
 
-/** The same selection as `rsyncFilters`, as a POSIX shell command that tars it to stdout. */
-export function tarCommand(remotePath, scope) {
+/** The same selection as `rsyncFilters`, as a POSIX shell command that prints the paths. */
+export function findCommand(remotePath, scope) {
   const prune = ['-name', "'.?*'", ...SKIP_DIRS.flatMap((dir) => ['-o', '-name', shellQuote(dir)])].join(' ')
   const names =
     scope === 'tex'
@@ -263,8 +263,40 @@ export function tarCommand(remotePath, scope) {
       : [...BUILD_EXTS.map((ext) => `-iname '*.${ext}'`), ...BUILD_NAMES.map((name) => `-name ${shellQuote(name)}`)]
   return (
     `cd ${shellQuote(remotePath)} && find . -type d \\( ${prune} \\) -prune -o -type f \\( ${names.join(' -o ')} \\)` +
-    ` -size -${parseInt(MAX_FILE, 10) * 1024}k -print | tar -cf - -T -`
+    ` -size -${parseInt(MAX_FILE, 10) * 1024}k -print`
   )
+}
+
+/** That selection, tarred to stdout. */
+export const tarCommand = (remotePath, scope) => `${findCommand(remotePath, scope)} | tar -cf - -T -`
+
+/** Whether a copy of `scope` takes the file at `rel` (relative to the workspace). */
+export function isSelected(rel, scope) {
+  const parts = rel.split(/[\\/]/)
+  const name = parts.pop()
+  if (parts.some((dir) => dir.startsWith('.') || SKIP_DIRS.includes(dir))) return false
+  const ext = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1).toLowerCase() : ''
+  return scope === 'tex' ? ext === 'tex' : BUILD_EXTS.includes(ext) || BUILD_NAMES.includes(name)
+}
+
+/** Removes the selected files of `localPath` that are not in `keep` (paths like `./a/b.tex`). */
+async function pruneLocal(localPath, keep, scope) {
+  const kept = new Set([...keep].map((rel) => rel.replace(/^\.\//, '')))
+  const queue = ['']
+  while (queue.length > 0) {
+    const dir = queue.shift()
+    let entries = []
+    try {
+      entries = await readdir(path.join(localPath, dir), { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      const rel = dir ? `${dir}/${entry.name}` : entry.name
+      if (entry.isDirectory()) queue.push(rel)
+      else if (isSelected(rel, scope) && !kept.has(rel)) await rm(path.join(localPath, rel), { force: true })
+    }
+  }
 }
 
 /** rsync's -e takes one string; quotes keep a path with spaces in one argument. */
@@ -323,6 +355,43 @@ function tarCopy({ ssh, env, remotePath, localPath, scope, signal }) {
   })
 }
 
+/** Touched after each copy; hidden, so neither rsync nor the tar pruning ever removes it. */
+const USED_MARKER = '.orca-latex-preview-used'
+
+async function markUsed(localPath) {
+  const marker = path.join(localPath, USED_MARKER)
+  const now = new Date()
+  try {
+    await utimes(marker, now, now)
+  } catch {
+    await writeFile(marker, '').catch(() => {})
+  }
+}
+
+/**
+ * Deletes the copies under `remoteRoot` that no build has used for `maxAgeMs` (a copy without a
+ * marker counts by its folder's age), except those in `keep`. Returns the removed folders.
+ */
+export async function pruneStaleCopies(remoteRoot, { maxAgeMs, keep = new Set(), now = Date.now() } = {}) {
+  let names = []
+  try {
+    names = await readdir(remoteRoot)
+  } catch {
+    return []
+  }
+  const removed = []
+  for (const name of names) {
+    const dir = path.join(remoteRoot, name)
+    if (keep.has(dir)) continue
+    const used = await stat(path.join(dir, USED_MARKER)).catch(() => stat(dir).catch(() => null))
+    if (used && now - used.mtimeMs > maxAgeMs) {
+      await rm(dir, { recursive: true, force: true })
+      removed.push(dir)
+    }
+  }
+  return removed
+}
+
 const trimError = (text) => text.trim().split('\n').slice(-3).join(' ').slice(0, 400)
 
 /**
@@ -364,7 +433,8 @@ export function createRemoteMirror({ cacheRoot, log = () => {} }) {
     const name = target.label || target.configHost || target.host
     if (!noRsync.has('local') && !noRsync.has(hostId)) {
       const source = `${ssh[ssh.length - 1]}:${remotePath.replace(/\/+$/, '')}/`
-      const args = ['-rt', '--protect-args', `--max-size=${MAX_FILE}`, '--timeout=60', '-e', rshString(ssh.slice(0, -2)), ...rsyncFilters(scope), source, `${localPath}${path.sep}`]
+      // --delete removes files gone from the host; the filters keep it to the files copied.
+      const args = ['-rt', '--delete', '--protect-args', `--max-size=${MAX_FILE}`, '--timeout=60', '-e', rshString(ssh.slice(0, -2)), ...rsyncFilters(scope), source, `${localPath}${path.sep}`]
       try {
         const result = await run('rsync', args, { env, signal })
         // 24: files vanished while copying, which a later sync settles.
@@ -382,6 +452,9 @@ export function createRemoteMirror({ cacheRoot, log = () => {} }) {
     }
     const result = await tarCopy({ ssh, env, remotePath, localPath, scope, signal })
     if (result.code !== 0) throw new Error(`Could not copy from ${name}: ${trimError(result.stderr) || `exit code ${result.code}`}`)
+    // tar only adds files: list the host's and drop the local ones it no longer has.
+    const listing = await run('ssh', [...ssh, findCommand(remotePath, scope)], { env, signal })
+    if (listing.code === 0) await pruneLocal(localPath, listing.stdout.split('\n').filter(Boolean), scope)
   }
 
   /** Brings `localPath` up to date with the remote folder; concurrent calls share one copy. */
@@ -392,7 +465,10 @@ export function createRemoteMirror({ cacheRoot, log = () => {} }) {
     const recentFailure = unreachable.get(hostId)
     if (recentFailure && Date.now() - recentFailure.at < 60_000) throw new Error(recentFailure.message)
     const job = copy({ hostId, remotePath, localPath, scope, signal })
-      .then(() => unreachable.delete(hostId))
+      .then(() => {
+        unreachable.delete(hostId)
+        return markUsed(localPath)
+      })
       .catch((error) => {
         if (/Could not resolve|timed out|Connection refused|Permission denied|Host key|No route/i.test(error.message)) {
           unreachable.set(hostId, { at: Date.now(), message: error.message })
