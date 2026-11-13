@@ -232,6 +232,7 @@ export default async function activate(orca) {
       pdfSize: build.pdf ? build.pdf.bytes.length : 0,
       chunks: build.pdf ? Math.ceil(build.pdf.bytes.length / CHUNK_BYTES) : 0,
       outDir: build.outDir,
+      upload: build.upload ?? null,
       result: r
         ? {
             ok: r.ok,
@@ -288,6 +289,7 @@ export default async function activate(orca) {
       queued: false,
       chain: 0,
       overlays: new Map(), // absolute source path -> unsaved text
+      saved: new Map(), // absolute source path -> the text a save just wrote, already built
       sessions: new Set(),
       waiters: [],
       abort: new AbortController()
@@ -300,10 +302,10 @@ export default async function activate(orca) {
     if (build.workspace?.remote) {
       // Everything the build reads, before the first build and the watcher; then a copy every few
       // seconds, whose changed files reach the watcher like any edit on disk.
-      await syncRemote(build.workspace, 'full', build.abort.signal)
+      await syncBuild(build)
       build.remoteTimer = setInterval(() => {
         if (build.compiling || !isOnScreen(build)) return
-        syncRemote(build.workspace, 'full', build.abort.signal).then(
+        syncBuild(build).then(
           () => (build.remoteError = null),
           (error) => {
             if (build.remoteError !== error.message) orca.log(`sync of ${build.workspace.name} failed: ${error.message}`)
@@ -316,6 +318,92 @@ export default async function activate(orca) {
     builds.set(root, build)
     startWatching(build)
     return build
+  }
+
+  // ------------------------------------------------------------------ remote builds
+
+  /** The main document's PDF, relative to the workspace (`/`-separated). */
+  const pdfRel = (build) =>
+    path.relative(build.workspace.path, build.root.replace(/\.[^.\\/]+$/, '.pdf')).split(path.sep).join('/')
+
+  /** Copies the build's workspace from its host, except the PDF this plugin uploads there. */
+  function syncBuild(build) {
+    const workspace = build.workspace
+    return remote.sync({
+      hostId: workspace.remote.hostId,
+      remotePath: workspace.remote.path,
+      localPath: workspace.path,
+      scope: 'full',
+      signal: build.abort.signal,
+      exclude: [pdfRel(build)]
+    })
+  }
+
+  /** Whether the PDF was built from what is saved now: no unsaved text then, or only text saved since. */
+  async function builtFromSaved(build) {
+    for (const [file, text] of build.pdf.sources) {
+      if ((await readFile(file, 'utf8').catch(() => null)) !== text) return false
+    }
+    return true
+  }
+
+  /**
+   * Puts the PDF next to the main file on the SSH host, once it was built from saved text and
+   * without errors, so the host's PDF matches the host's sources. One upload at a time; a newer
+   * PDF waits for the running one.
+   */
+  async function uploadPdf(build) {
+    if (!build.workspace?.remote || build.compiling) return
+    if (!(await setting('uploadPdf', true))) {
+      if (build.upload) {
+        build.upload = null
+        changed(build)
+      }
+      return
+    }
+    const workspace = build.workspace
+    const host = workspace.environment ?? (await remote.hostName(workspace.remote.hostId).catch(() => 'the host'))
+    const rel = pdfRel(build)
+    if (build.status !== 'ok' || !build.pdf) {
+      // The host keeps the last PDF built without errors.
+      if (build.upload?.state !== 'held') {
+        build.upload = { state: 'held', host, file: rel }
+        changed(build)
+      }
+      return
+    }
+    if (build.overlays.size > 0 || !(await builtFromSaved(build))) {
+      if (build.upload?.state !== 'unsaved') {
+        build.upload = { state: 'unsaved', host, file: rel }
+        changed(build)
+      }
+      return
+    }
+    if (build.upload?.rev === build.pdf.rev && build.upload.state === 'synced') return
+    if (build.uploading) {
+      build.uploadAgain = true
+      return
+    }
+    const pdf = build.pdf
+    build.uploading = true
+    build.upload = { state: 'syncing', host, file: rel, rev: pdf.rev }
+    changed(build)
+    try {
+      await remote.upload({ hostId: workspace.remote.hostId, remoteFile: path.posix.join(workspace.remote.path, rel), bytes: pdf.bytes, signal: build.abort.signal })
+      build.upload = { state: 'synced', host, file: rel, rev: pdf.rev, at: Date.now() }
+      orca.log(`uploaded ${rel} to ${host}`)
+    } catch (error) {
+      build.upload = { state: 'failed', host, file: rel, rev: pdf.rev, message: error.message }
+      orca.log(`upload of ${rel} to ${host} failed: ${error.message}`)
+    } finally {
+      build.uploading = false
+    }
+    if (!builds.has(build.root)) return
+    changed(build)
+    if (build.uploadAgain) {
+      build.uploadAgain = false
+      void uploadPdf(build)
+    }
   }
 
   /** Whether a view of the build is visible; a remote build stops copying while none is. */
@@ -378,6 +466,7 @@ export default async function activate(orca) {
     try {
       await mkdir(build.outDir, { recursive: true })
       await Promise.all([writeOverlays(build), mirrorFolders(build)])
+      const sources = new Map(build.overlays) // the unsaved text this PDF is built from
       const result = await compileDocument({
         root: build.root,
         engine: build.engine,
@@ -396,7 +485,7 @@ export default async function activate(orca) {
       build.result = result
       if (result.pdfPath && (!build.pdf || build.pdf.mtime !== result.pdfMtime)) {
         pdfRev += 1
-        build.pdf = { rev: pdfRev, mtime: result.pdfMtime, bytes: await readFile(result.pdfPath) }
+        build.pdf = { rev: pdfRev, mtime: result.pdfMtime, bytes: await readFile(result.pdfPath), sources }
       }
       build.status = result.ok ? 'ok' : result.produced ? 'warnings' : 'failed'
       // Spelled out in the plugin log too, for anyone (or any agent) reading `orca plugin logs`.
@@ -422,6 +511,7 @@ export default async function activate(orca) {
       build.trigger = null
     }
     changed(build)
+    if (!build.queued) void uploadPdf(build)
     if (build.queued) {
       // Edits arrived during the build. A build that keeps re-triggering itself (a package that
       // writes a source file) stops after a few rounds instead of looping.
@@ -456,14 +546,21 @@ export default async function activate(orca) {
     const onChange = async (_event, filename) => {
       const name = filename ? String(filename) : ''
       if (!builds.has(build.root) || !isSourceChange(build, name)) return
-      // A save of a file open in an editor matches its overlay: nothing new to build.
+      // A save of a file open in an editor matches its overlay: nothing new to build. A save is
+      // often reported twice (a rename, then a change), and both reports can be read at once, so
+      // the checks run after the read: the second one finds the text just saved, already built.
       const full = path.resolve(build.projectDir, name)
-      if (build.overlays.has(full)) {
+      if (build.overlays.has(full) || build.saved.has(full)) {
         const disk = await readFile(full, 'utf8').catch(() => null)
-        if (disk === build.overlays.get(full)) {
+        if (build.overlays.has(full) && disk === build.overlays.get(full)) {
           build.overlays.delete(full)
+          build.saved.set(full, disk)
+          // Saved: the PDF on screen now matches the files on disk (or on the host).
+          void uploadPdf(build)
           return
         }
+        if (!build.overlays.has(full) && disk !== null && disk === build.saved.get(full)) return
+        build.saved.delete(full)
       }
       if (!(await setting('autoCompile', true))) return
       if (build.compiling) {
@@ -531,6 +628,7 @@ export default async function activate(orca) {
   async function setOverlay(build, file, text) {
     const disk = await readFile(file, 'utf8').catch(() => null)
     const before = build.overlays.get(file) ?? disk
+    build.saved.delete(file)
     if (disk === text) build.overlays.delete(file)
     else build.overlays.set(file, text)
     return before !== text
@@ -572,7 +670,8 @@ export default async function activate(orca) {
     sessions.set(session.id, session)
     build.sessions.add(session.id)
     const edited = typeof text === 'string' ? await setOverlay(build, file, text) : false
-    if (!build.result || edited) {
+    // A second view opening while the first build runs waits for that build.
+    if ((!build.result && !build.compiling) || edited) {
       build.trigger = `opened ${path.basename(file)}`
       scheduleBuild(build, 0)
     }
@@ -675,7 +774,7 @@ export default async function activate(orca) {
     const build = session.build
     // Back on screen: pick up what changed on the host meanwhile, without waiting for the timer.
     if (!wasOnScreen && isOnScreen(build) && build.workspace?.remote && !build.compiling) {
-      syncRemote(build.workspace, 'full', build.abort.signal).catch((error) => orca.log(`sync of ${build.workspace.name} failed: ${error.message}`))
+      syncBuild(build).catch((error) => orca.log(`sync of ${build.workspace.name} failed: ${error.message}`))
     }
     return { ok: true }
   })

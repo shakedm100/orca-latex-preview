@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { isSelected, orcaCliCandidates, pruneStaleCopies, orcaDataDirs, readSshTargets, rsyncFilters, sshArgs, sshTargetId, tarCommand } from '../worker/remote.mjs'
+import { isSelected, orcaCliCandidates, pruneStaleCopies, uploadCommand, orcaDataDirs, readSshTargets, rsyncFilters, sshArgs, sshTargetId, tarCommand } from '../worker/remote.mjs'
 
 test('reads the SSH target id from a workspace host id', () => {
   assert.equal(sshTargetId('ssh:ssh-1793696715423-w26rrp'), 'ssh-1793696715423-w26rrp')
@@ -139,4 +139,17 @@ test('deletes copies unused for longer than the limit, keeping those in use', as
   } finally {
     await rm(root, { recursive: true, force: true })
   }
+})
+
+test('uploads through a temporary file, then renames it into place', () => {
+  assert.equal(
+    uploadCommand("/home/o'neil/docs/notebook.pdf"),
+    "cd '/home/o'\\''neil/docs' && cat > '.notebook.pdf.orca-latex-preview-upload' && mv -f '.notebook.pdf.orca-latex-preview-upload' 'notebook.pdf'"
+  )
+})
+
+test('never downloads the PDF the plugin uploads', () => {
+  const rules = rsyncFilters('full', ['docs/notebook/notebook.pdf'])
+  assert.equal(rules[0], '--exclude=/docs/notebook/notebook.pdf')
+  assert.ok(rules.indexOf('--exclude=/docs/notebook/notebook.pdf') < rules.indexOf('--include=*.pdf'))
 })

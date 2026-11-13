@@ -4,7 +4,7 @@
   "execution": "trusted-worker",
   "id": "latex-preview",
   "name": "LaTeX Preview",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Adds PDF and Editor | PDF views to .tex files: the compiled document, or the source and the PDF side by side, rebuilt as you type, with source and PDF jumps, autocomplete and an outline.",
   "author": {
     "name": "shakedm100",
@@ -106,6 +106,13 @@
         "default": "",
         "placeholder": "build",
         "maxLength": 200
+      },
+      {
+        "key": "uploadPdf",
+        "title": "Copy the PDF to the SSH host",
+        "description": "For a document on an SSH host: after a build without errors from saved files, write the PDF next to the main .tex file on the host, replacing the one there. The status line shows when it syncs.",
+        "type": "boolean",
+        "default": true
       },
       {
         "key": "shellEscape",

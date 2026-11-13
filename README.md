@@ -89,8 +89,16 @@ copies the files a build can read (`.tex`, `.bib`, styles, figures, data files f
 compiles that copy, and copies again every few seconds while a view of the document is on
 screen, so a file saved on the host rebuilds the PDF (and one deleted there is deleted from the
 copy). Unsaved edits come from the editor as usual, and Orca saves them to the host as it does any
-file. The plugin writes nothing on the host, and the PDF stays on this machine. A copy no view has
-used for two weeks is deleted.
+file. A copy no view has used for two weeks is deleted.
+
+The PDF goes back to the host: after a build without errors from saved files, the plugin writes
+it next to the main `.tex` file there (`notebook.pdf` beside `notebook.tex`), replacing the one
+there, so the host's PDF always matches the host's sources. The status line says **Syncing to
+server…**, then **Synced to server**, or **Syncs to server on save** while there are unsaved
+edits; after a build with errors it says **Not synced (errors)** and the host keeps the last good
+PDF; a failed upload shows as **Not synced**, with the reason on hover. That PDF is the only
+file the plugin writes on the host. Turn off **Copy the PDF to the SSH host** to keep the PDF on
+this machine only.
 
 It connects with your own OpenSSH client (`ssh`, and `rsync` when both machines have it, else
 `tar`), using the host settings Orca saved: a host imported from `~/.ssh/config` is reached by
@@ -156,6 +164,7 @@ the system's TeX; the view says so and suggests TinyTeX in your home folder.
 | Output folder | empty | Relative to the main file; empty uses Orca's cache |
 | Precompile the preamble | on | pdfLaTeX with mylatexformat; otherwise ignored |
 | Allow shell escape | off | Needed by minted; lets the document run commands |
+| Copy the PDF to the SSH host | on | For documents on an SSH host; writes the PDF beside the main file there |
 | Run the project's latexmkrc | off | Lets latexmk run a `latexmkrc` in the document's folder (Perl); your own `~/.latexmkrc` is always read |
 | Extra TeX bin folder | empty | Searched before PATH |
 

@@ -237,9 +237,13 @@ export function sshArgs(target, { controlDir = null, platform = process.platform
 
 // ------------------------------------------------------------------ copying
 
-/** rsync filter rules: every folder but hidden and skipped ones, then the wanted files only. */
-export function rsyncFilters(scope) {
-  const rules = ['--exclude=.*/']
+/**
+ * rsync filter rules: every folder but hidden and skipped ones, then the wanted files only.
+ * `exclude` lists paths (from the workspace, `/`-separated) never copied, such as a PDF this
+ * plugin uploads itself.
+ */
+export function rsyncFilters(scope, exclude = []) {
+  const rules = [...exclude.map((rel) => `--exclude=/${rel.replace(/^\/+/, '')}`), '--exclude=.*/']
   for (const dir of SKIP_DIRS) rules.push(`--exclude=${dir}/`)
   rules.push('--include=*/')
   if (scope === 'tex') {
@@ -255,7 +259,7 @@ export function rsyncFilters(scope) {
 const shellQuote = (text) => `'${String(text).replace(/'/g, `'\\''`)}'`
 
 /** The same selection as `rsyncFilters`, as a POSIX shell command that prints the paths. */
-export function findCommand(remotePath, scope) {
+export function findCommand(remotePath, scope, exclude = []) {
   const prune = ['-name', "'.?*'", ...SKIP_DIRS.flatMap((dir) => ['-o', '-name', shellQuote(dir)])].join(' ')
   const names =
     scope === 'tex'
@@ -263,12 +267,20 @@ export function findCommand(remotePath, scope) {
       : [...BUILD_EXTS.map((ext) => `-iname '*.${ext}'`), ...BUILD_NAMES.map((name) => `-name ${shellQuote(name)}`)]
   return (
     `cd ${shellQuote(remotePath)} && find . -type d \\( ${prune} \\) -prune -o -type f \\( ${names.join(' -o ')} \\)` +
-    ` -size -${parseInt(MAX_FILE, 10) * 1024}k -print`
+    ` -size -${parseInt(MAX_FILE, 10) * 1024}k${exclude.map((rel) => ` ! -path ${shellQuote(`./${rel.replace(/^\/+/, '')}`)}`).join('')} -print`
   )
 }
 
+/** A POSIX command that writes stdin to `remoteFile`, through a temporary file and a rename. */
+export function uploadCommand(remoteFile) {
+  const dir = path.posix.dirname(remoteFile)
+  const name = path.posix.basename(remoteFile)
+  const temp = `.${name}.orca-latex-preview-upload`
+  return `cd ${shellQuote(dir)} && cat > ${shellQuote(temp)} && mv -f ${shellQuote(temp)} ${shellQuote(name)}`
+}
+
 /** That selection, tarred to stdout. */
-export const tarCommand = (remotePath, scope) => `${findCommand(remotePath, scope)} | tar -cf - -T -`
+export const tarCommand = (remotePath, scope, exclude) => `${findCommand(remotePath, scope, exclude)} | tar -cf - -T -`
 
 /** Whether a copy of `scope` takes the file at `rel` (relative to the workspace). */
 export function isSelected(rel, scope) {
@@ -302,9 +314,13 @@ async function pruneLocal(localPath, keep, scope) {
 /** rsync's -e takes one string; quotes keep a path with spaces in one argument. */
 const rshString = (args) => ['ssh', ...args].map((arg) => (/[\s"']/.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg)).join(' ')
 
-function run(command, args, { env, signal, stdin, timeoutMs = 120_000 } = {}) {
+function run(command, args, { env, signal, input, timeoutMs = 120_000 } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { env, signal, windowsHide: true, stdio: [stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] })
+    const child = spawn(command, args, { env, signal, windowsHide: true, stdio: [input ? 'pipe' : 'ignore', 'pipe', 'pipe'] })
+    if (input) {
+      child.stdin.on('error', () => {}) // the command ended early: its exit code says why
+      child.stdin.end(input)
+    }
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (chunk) => {
@@ -326,9 +342,9 @@ function run(command, args, { env, signal, stdin, timeoutMs = 120_000 } = {}) {
 }
 
 /** `ssh ... remote command | tar -x` into `localPath`. */
-function tarCopy({ ssh, env, remotePath, localPath, scope, signal }) {
+function tarCopy({ ssh, env, remotePath, localPath, scope, signal, exclude }) {
   return new Promise((resolve, reject) => {
-    const source = spawn('ssh', [...ssh, tarCommand(remotePath, scope)], { env, signal, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const source = spawn('ssh', [...ssh, tarCommand(remotePath, scope, exclude)], { env, signal, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
     const sink = spawn('tar', ['-xf', '-', '-C', localPath], { env, signal, windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] })
     let stderr = ''
     const keep = (chunk) => {
@@ -427,14 +443,14 @@ export function createRemoteMirror({ cacheRoot, log = () => {} }) {
     return { target, env, ssh: sshArgs(target, { controlDir }) }
   }
 
-  async function copy({ hostId, remotePath, localPath, scope, signal }) {
+  async function copy({ hostId, remotePath, localPath, scope, signal, exclude }) {
     const { target, env, ssh } = await connection(hostId)
     await mkdir(localPath, { recursive: true })
     const name = target.label || target.configHost || target.host
     if (!noRsync.has('local') && !noRsync.has(hostId)) {
       const source = `${ssh[ssh.length - 1]}:${remotePath.replace(/\/+$/, '')}/`
       // --delete removes files gone from the host; the filters keep it to the files copied.
-      const args = ['-rt', '--delete', '--protect-args', `--max-size=${MAX_FILE}`, '--timeout=60', '-e', rshString(ssh.slice(0, -2)), ...rsyncFilters(scope), source, `${localPath}${path.sep}`]
+      const args = ['-rt', '--delete', '--protect-args', `--max-size=${MAX_FILE}`, '--timeout=60', '-e', rshString(ssh.slice(0, -2)), ...rsyncFilters(scope, exclude), source, `${localPath}${path.sep}`]
       try {
         const result = await run('rsync', args, { env, signal })
         // 24: files vanished while copying, which a later sync settles.
@@ -450,21 +466,22 @@ export function createRemoteMirror({ cacheRoot, log = () => {} }) {
       }
       log(`rsync unavailable for ${name}; copying with tar`)
     }
-    const result = await tarCopy({ ssh, env, remotePath, localPath, scope, signal })
+    const result = await tarCopy({ ssh, env, remotePath, localPath, scope, signal, exclude })
     if (result.code !== 0) throw new Error(`Could not copy from ${name}: ${trimError(result.stderr) || `exit code ${result.code}`}`)
     // tar only adds files: list the host's and drop the local ones it no longer has.
-    const listing = await run('ssh', [...ssh, findCommand(remotePath, scope)], { env, signal })
-    if (listing.code === 0) await pruneLocal(localPath, listing.stdout.split('\n').filter(Boolean), scope)
+    const listing = await run('ssh', [...ssh, findCommand(remotePath, scope, exclude)], { env, signal })
+    // Excluded files are kept, as rsync keeps them.
+    if (listing.code === 0) await pruneLocal(localPath, [...listing.stdout.split('\n').filter(Boolean), ...exclude.map((rel) => `./${rel}`)], scope)
   }
 
   /** Brings `localPath` up to date with the remote folder; concurrent calls share one copy. */
-  async function sync({ hostId, remotePath, localPath, scope = 'full', signal }) {
+  async function sync({ hostId, remotePath, localPath, scope = 'full', signal, exclude = [] }) {
     const key = `${localPath}|${scope}`
     const running = inFlight.get(key)
     if (running) return running
     const recentFailure = unreachable.get(hostId)
     if (recentFailure && Date.now() - recentFailure.at < 60_000) throw new Error(recentFailure.message)
-    const job = copy({ hostId, remotePath, localPath, scope, signal })
+    const job = copy({ hostId, remotePath, localPath, scope, signal, exclude })
       .then(() => {
         unreachable.delete(hostId)
         return markUsed(localPath)
@@ -480,5 +497,20 @@ export function createRemoteMirror({ cacheRoot, log = () => {} }) {
     return job
   }
 
-  return { sync, targetFor }
+  /** Writes `bytes` to `remoteFile` (an absolute path on the host). */
+  async function upload({ hostId, remoteFile, bytes, signal }) {
+    const { target, env, ssh } = await connection(hostId)
+    const result = await run('ssh', [...ssh, uploadCommand(remoteFile)], { env, signal, input: bytes })
+    if (result.code !== 0) {
+      throw new Error(`Could not write ${path.posix.basename(remoteFile)} on ${target.label || target.host}: ${trimError(result.stderr) || `exit code ${result.code}`}`)
+    }
+  }
+
+  /** The name Orca shows for an SSH host. */
+  async function hostName(hostId) {
+    const target = await targetFor(hostId)
+    return target.label || target.configHost || target.host
+  }
+
+  return { sync, upload, hostName, targetFor }
 }

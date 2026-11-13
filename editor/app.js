@@ -318,6 +318,26 @@ async function recompile() {
 
 // ------------------------------------------------------------------ build state
 
+/** How the PDF stands on the SSH host, for a document that lives there. */
+function syncLabel(upload) {
+  if (!upload) return null
+  const where = `${upload.file} on ${upload.host}`
+  switch (upload.state) {
+    case 'syncing':
+      return { kind: 'compiling', text: `Syncing to ${upload.host}…`, title: `Writing ${where}` }
+    case 'synced':
+      return { text: `Synced to ${upload.host}`, title: `${where} is this PDF (${new Date(upload.at).toLocaleTimeString()})` }
+    case 'failed':
+      return { kind: 'warnings', text: `Not synced to ${upload.host}`, title: upload.message }
+    case 'held':
+      return { text: `Not synced to ${upload.host} (errors)`, title: `${where} keeps the last PDF built without errors` }
+    case 'unsaved':
+      return { text: `Syncs to ${upload.host} on save`, title: `${where} is updated once the edits are saved` }
+    default:
+      return null
+  }
+}
+
 function applyState(state) {
   if (!state) return
   if (state.jump) jumpToLine(state.jump.line)
@@ -335,7 +355,10 @@ function applyState(state) {
         : state.status === 'warnings'
           ? `Compiled with ${plural(errors, 'error')}`
           : 'Build failed'
-    setStatus(state.status, label, `${state.root}\n${engine}, ${formatMs(result.durationMs)}\nOutput: ${state.outDir}`)
+    const title = `${state.root}\n${engine}, ${formatMs(result.durationMs)}\nOutput: ${state.outDir}`
+    const sync = syncLabel(state.upload)
+    if (sync) setStatus(sync.kind ?? state.status, `${label} · ${sync.text}`, `${title}\n${sync.title}`)
+    else setStatus(state.status, label, title)
     renderIssues(result)
     if (!state.rev && !viewer.hasDocument) setEmpty('The build produced no PDF', 'See the errors above.')
   }
