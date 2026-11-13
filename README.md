@@ -77,9 +77,28 @@ Both compile with the TeX installation on your machine.
 ## How the plugin finds the file
 
 Orca gives plugin editors the text of a document but never its path. To compile, the plugin
-needs the folder, so it compares the text with the `.tex` files of your local workspaces and
+needs the folder, so it compares the text with the `.tex` files of your workspaces and
 takes the matching file (or, for a buffer with unsaved edits, the clearly most similar one). When
 it cannot tell, it lists the candidates and asks.
+
+### Workspaces on SSH hosts
+
+The build always runs on this machine, with its TeX. For a workspace on an SSH host, the plugin
+copies the files a build can read (`.tex`, `.bib`, styles, figures, data files for plots, up to
+50 MB each, skipping hidden folders and `node_modules`) into `~/.cache/orca-latex-preview/remote/`,
+compiles that copy, and copies again every few seconds, so a file saved on the host rebuilds the
+PDF. Unsaved edits come from the editor as usual. Nothing is written on the host.
+
+It connects with your own OpenSSH client (`ssh`, and `rsync` when both machines have it, else
+`tar`), using the host settings Orca saved: a host imported from `~/.ssh/config` is reached by
+its alias. The connection must work without a prompt, through a key without a passphrase or a
+running ssh-agent. The first copy of a large project takes a few seconds.
+
+When Orca runs its own server on the SSH host (an environment, such as one Orca sets up when you
+add the host), that server keeps the workspaces, and plugins are not given them. The plugin then
+asks the `orca` CLI (`orca-ide` on Linux) for each environment's workspaces and copies them the
+same way. A click on an issue or outline entry in another file of such a workspace cannot open
+that file; it still works within the open file.
 
 ## Requirements
 
@@ -150,7 +169,12 @@ the system's TeX; the view says so and suggests TinyTeX in your home folder.
   cannot be told a line.
 - Opening other files needs the "Open your workspaces and their files" permission, which Orca
   asks for when installing or updating.
-- Workspaces on SSH or paired hosts are not supported, because the build runs on this machine.
+- Workspaces on paired Orca runtimes are not supported. SSH workspaces are, through a local copy
+  (see above), which needs `ssh` on this machine and a login that does not prompt. Orca does not
+  give plugins a host's connection settings, so the plugin reads the SSH hosts saved in Orca's
+  profile; a future Orca that stores them differently would break this until the plugin follows.
+- Files deleted on an SSH host stay in the local copy until you clear
+  `~/.cache/orca-latex-preview/remote/`.
 
 ## Development
 
@@ -169,7 +193,7 @@ Linux, macOS and Windows, and builds the test project with TeX Live on Ubuntu.
   `compile.mjs` the build steps; `synctex.mjs` source and PDF positions; `project.mjs` outline,
   labels, bibliography, commands and word count; `logparse.mjs` log parsing; `preamble.mjs`
   precompiled preambles; `requirements.mjs` what to install; `discover.mjs` document, root and
-  engine detection; `tools.mjs` executable lookup.
+  engine detection; `tools.mjs` executable lookup; `remote.mjs` copies of SSH workspaces.
 - `editor/`: the two views. `split.html` and `pdf.html` share `app.js` (document sync and the
   worker session), `viewer.js` (pdf.js viewer with text selection and find), `source-editor.js` (CodeMirror),
   `latex-tools.js` (hovers, undefined keys, `\end` on Enter, folding) and `completions.js`.

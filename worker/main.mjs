@@ -3,7 +3,8 @@
 // unsaved) text over the project files and hands the PDF back in chunks.
 //
 // Orca gives custom editors the document text but never its path, so `latex.attach` finds the
-// file by matching that text against the .tex files of this machine's workspaces.
+// file by matching that text against the .tex files of the workspaces. A workspace on an SSH host
+// is copied into the cache first (remote.mjs) and built from that copy.
 import { createHash, randomUUID } from 'node:crypto'
 import { watch } from 'node:fs'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
@@ -13,6 +14,7 @@ import { compileDocument, GENERATED } from './compile.mjs'
 import { createPreambleCache } from './preamble.mjs'
 import { chooseEngine, resolveRoot, scanTex } from './discover.mjs'
 import { scanProject } from './project.mjs'
+import { createRemoteMirror, listEnvironmentWorkspaces, sshTargetId } from './remote.mjs'
 import { createSynctex, samePath } from './synctex.mjs'
 import { detectTools } from './tools.mjs'
 
@@ -22,6 +24,7 @@ const WAIT_MS = 25_000 // a long poll answers within this, changed or not
 const SESSION_TTL_MS = 90_000 // a session that stops polling (its tab closed) is dropped
 const BUILD_LINGER_MS = 60_000 // keep a build's PDF a while so switching views is instant
 const INDEX_TTL_MS = 20_000
+const REMOTE_SYNC_MS = 4_000 // how often a remote build looks for changed files on its host
 // Each OS's own cache folder: %LOCALAPPDATA% on Windows, ~/Library/Caches on macOS, XDG elsewhere.
 const CACHE_ROOT = path.join(
   process.platform === 'win32'
@@ -54,30 +57,63 @@ export default async function activate(orca) {
   const sessions = new Map()
   let pdfRev = 0
   const preambleCache = createPreambleCache()
+  const remote = createRemoteMirror({ cacheRoot: CACHE_ROOT, log: (message) => orca.log(message) })
 
   // ------------------------------------------------------------------ workspaces and files
 
+  // Workspaces of Orca servers on SSH hosts, which `workspace.list` leaves out (see remote.mjs).
+  let environmentList = { at: 0, workspaces: [] }
+  async function environmentWorkspaces() {
+    if (Date.now() - environmentList.at < INDEX_TTL_MS) return environmentList.workspaces
+    const workspaces = await listEnvironmentWorkspaces({ log: (message) => orca.log(message) }).catch((error) => {
+      orca.log(`cannot list the workspaces of Orca servers: ${error.message}`)
+      return []
+    })
+    environmentList = { at: Date.now(), workspaces }
+    return workspaces
+  }
+
   async function workspaces() {
     if (!orca.host.has('workspace.list')) return { focused: null, all: [] }
-    const [list, context] = await Promise.all([
+    const [list, context, extra] = await Promise.all([
       orca.host.call('workspace.list', {}),
-      orca.host.has('workspace.readContext') ? orca.host.call('workspace.readContext', {}).catch(() => null) : null
+      orca.host.has('workspace.readContext') ? orca.host.call('workspace.readContext', {}).catch(() => null) : null,
+      environmentWorkspaces()
     ])
-    // Only this machine's folders can be compiled here; SSH and paired hosts are skipped.
-    const local = list.workspaces.filter((workspace) => !workspace.hostId || workspace.hostId === 'local')
+    // This machine's folders are read in place. A folder on an SSH host is read from a copy in the
+    // cache: `path` is that copy, `remote` says where it comes from. Paired hosts are skipped.
+    const usable = []
+    for (const workspace of [...list.workspaces, ...extra]) {
+      if (!workspace.hostId || workspace.hostId === 'local') usable.push(workspace)
+      else if (sshTargetId(workspace.hostId)) {
+        usable.push({
+          ...workspace,
+          path: path.join(CACHE_ROOT, 'remote', hash(`${workspace.hostId}\0${workspace.path}`).slice(0, 16)),
+          remote: { hostId: workspace.hostId, path: workspace.path }
+        })
+      }
+    }
     let focused = null
     if (context) {
-      const byName = local.filter((workspace) => workspace.name === context.displayName)
+      const byName = usable.filter((workspace) => workspace.name === context.displayName)
       focused = byName.find((workspace) => !context.branch || workspace.branch === context.branch) ?? byName[0] ?? null
     }
-    if (focused) local.sort((a, b) => (a === focused ? -1 : b === focused ? 1 : 0))
-    return { focused, all: local }
+    // The focused workspace first, then this machine's, then remote ones.
+    const rank = (workspace) => (workspace === focused ? 0 : workspace.remote ? 2 : 1)
+    usable.sort((a, b) => rank(a) - rank(b))
+    return { focused, all: usable }
+  }
+
+  /** Copies a remote workspace's files into its local copy (`scope` 'tex' or 'full'). */
+  function syncRemote(workspace, scope, signal) {
+    return remote.sync({ hostId: workspace.remote.hostId, remotePath: workspace.remote.path, localPath: workspace.path, scope, signal })
   }
 
   const indexCache = new Map() // workspace path -> { at, files, dirs }
   async function texIndex(workspace) {
     const cached = indexCache.get(workspace.path)
     if (cached && Date.now() - cached.at < INDEX_TTL_MS) return cached
+    if (workspace.remote) await syncRemote(workspace, 'tex')
     const { docs, dirs } = await scanTex(workspace.path, true)
     const entry = { at: Date.now(), files: docs.map((doc) => doc.path), dirs }
     indexCache.set(workspace.path, entry)
@@ -106,8 +142,23 @@ export default async function activate(orca) {
     const size = Buffer.byteLength(text)
     const exact = []
     const scored = []
+    const problems = []
+    const indexes = new Map()
+    const index = (workspace) => {
+      if (!indexes.has(workspace)) {
+        const read = texIndex(workspace).catch((error) => {
+          problems.push(`${workspace.name}: ${error.message}`)
+          orca.log(`cannot read ${workspace.name} (${workspace.remote?.path ?? workspace.path}): ${error.message}`)
+          return { files: [] }
+        })
+        indexes.set(workspace, read)
+      }
+      return indexes.get(workspace)
+    }
     for (const workspace of all) {
-      const { files } = await texIndex(workspace)
+      // Remote workspaces come last; once one is needed, all of them are copied at once.
+      if (workspace.remote && workspace !== focused) for (const other of all) if (other.remote) void index(other)
+      const { files } = await index(workspace)
       for (const file of files) {
         let info
         try {
@@ -126,22 +177,22 @@ export default async function activate(orca) {
     }
     const describe = ({ file, workspace }) => ({
       path: file,
-      label: `${path.basename(workspace.path)}/${path.relative(workspace.path, file)}`,
+      label: `${path.basename(workspace.remote?.path ?? workspace.path)}/${path.relative(workspace.path, file).split(path.sep).join('/')}`,
       workspaceId: workspace.id
     })
-    if (exact.length === 1) return { match: exact[0], candidates: [] }
+    if (exact.length === 1) return { match: exact[0], candidates: [], problems }
     if (exact.length > 1) {
       const inFocus = exact.filter((entry) => entry.workspace === focused)
-      if (inFocus.length === 1) return { match: inFocus[0], candidates: [] }
-      return { match: null, candidates: exact.map(describe) }
+      if (inFocus.length === 1) return { match: inFocus[0], candidates: [], problems }
+      return { match: null, candidates: exact.map(describe), problems }
     }
     scored.sort((a, b) => b.score - a.score)
     const best = scored[0]
     // Unsaved edits: take a clear winner, otherwise let the person choose.
     if (best && best.score >= 0.6 && (!scored[1] || best.score - scored[1].score >= 0.15)) {
-      return { match: best, candidates: [] }
+      return { match: best, candidates: [], problems }
     }
-    return { match: null, candidates: scored.filter((entry) => entry.score > 0.05).slice(0, 12).map(describe) }
+    return { match: null, candidates: scored.filter((entry) => entry.score > 0.05).slice(0, 12).map(describe), problems }
   }
 
   async function workspaceFor(file, workspaceId) {
@@ -189,12 +240,20 @@ export default async function activate(orca) {
     for (const resolve of waiters) resolve()
   }
 
+  // Opening a build waits for a remote copy, so two views opening at once share one build.
+  const opening = new Map() // main document path -> promise of its build
   async function getBuild(root, workspace) {
-    let build = builds.get(root)
+    const build = builds.get(root)
     if (build) {
       clearTimeout(build.linger)
       return build
     }
+    if (!opening.has(root)) opening.set(root, openBuild(root, workspace).finally(() => opening.delete(root)))
+    return opening.get(root)
+  }
+
+  async function openBuild(root, workspace) {
+    let build
     const rootDir = path.dirname(root)
     const projectDir = workspace && root.startsWith(workspace.path + path.sep) ? workspace.path : rootDir
     const cacheDir = path.join(CACHE_ROOT, hash(root).slice(0, 16))
@@ -225,6 +284,22 @@ export default async function activate(orca) {
       rootDir,
       overlayDir: build.overlayDir
     })
+    if (build.workspace?.remote) {
+      // Everything the build reads, before the first build and the watcher; then a copy every few
+      // seconds, whose changed files reach the watcher like any edit on disk.
+      await syncRemote(build.workspace, 'full', build.abort.signal)
+      build.remoteTimer = setInterval(() => {
+        if (build.compiling) return
+        syncRemote(build.workspace, 'full', build.abort.signal).then(
+          () => (build.remoteError = null),
+          (error) => {
+            if (build.remoteError !== error.message) orca.log(`sync of ${build.workspace.name} failed: ${error.message}`)
+            build.remoteError = error.message
+          }
+        )
+      }, REMOTE_SYNC_MS)
+      build.remoteTimer.unref?.()
+    }
     builds.set(root, build)
     startWatching(build)
     return build
@@ -233,6 +308,7 @@ export default async function activate(orca) {
   function dropBuild(build) {
     clearTimeout(build.debounce)
     clearTimeout(build.linger)
+    clearInterval(build.remoteTimer)
     build.abort.abort()
     try {
       build.watcher?.close()
@@ -465,8 +541,8 @@ export default async function activate(orca) {
       if (!file.toLowerCase().endsWith('.tex')) throw coded('invalid_params', 'Pick a .tex file.')
       workspace = await workspaceFor(file, workspaceId)
     } else {
-      const { match, candidates } = await locate(String(text ?? ''))
-      if (!match) return { sessionId: null, candidates }
+      const { match, candidates, problems } = await locate(String(text ?? ''))
+      if (!match) return { sessionId: null, candidates, problems }
       file = match.file
       workspace = match.workspace
     }
@@ -553,7 +629,8 @@ export default async function activate(orca) {
     const workspace = build.workspace ?? (await workspaceFor(target))
     const rel = workspace ? path.relative(workspace.path, target) : null
     if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return { opened: false, reason: 'outside', rel: path.basename(target) }
-    if (!orca.host.has('editor.open')) return { opened: false, reason: 'unsupported', rel }
+    // A workspace of an Orca server on another host is not one `editor.open` can name.
+    if (!orca.host.has('editor.open') || workspace.environment) return { opened: false, reason: 'unsupported', rel }
     try {
       await orca.host.call('editor.open', { workspaceId: workspace.id, path: rel.split(path.sep).join('/') })
       return { opened: true, rel }
@@ -615,6 +692,10 @@ export default async function activate(orca) {
     node: process.version,
     granted: orca.grantedCapabilities,
     tools: toolInfo,
+    workspaces: orca.host.has('workspace.list')
+      ? await orca.host.call('workspace.list', {}).catch((error) => ({ error: error.message }))
+      : 'workspace.list unavailable',
+    context: orca.host.has('workspace.readContext') ? await orca.host.call('workspace.readContext', {}).catch((error) => ({ error: error.message })) : null,
     builds: [...builds.values()].map((build) => ({
       ...snapshot(build),
       sessions: build.sessions.size,

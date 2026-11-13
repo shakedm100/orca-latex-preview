@@ -210,7 +210,7 @@ async function attach(choice) {
     const input = await withText({ ...choice }, app.doc.value)
     const answer = await request('latex.attach', input, 60000)
     if (!answer.sessionId) {
-      showChoices(answer.candidates)
+      showChoices(answer.candidates, answer.problems)
       return false
     }
     app.sessionId = answer.sessionId
@@ -234,13 +234,14 @@ async function attach(choice) {
   }
 }
 
-function showChoices(candidates) {
+function showChoices(candidates, problems = []) {
   setStatus('', 'Which file is this?')
   els.empty.hidden = false
   els.empty.querySelector('.title').textContent = candidates.length ? 'Which file is this?' : 'File not found'
   els.empty.querySelector('.muted').textContent = candidates.length
     ? 'Orca does not tell plugin editors where a file lives, and this text matches more than one file (or has unsaved edits). Pick it:'
-    : 'No .tex file in your local workspaces matches this text. Save the file, then reopen this view.'
+    : 'No .tex file in your workspaces matches this text. Save the file, then reopen this view.' +
+      (problems.length ? ` Some workspaces could not be read: ${problems.join('; ')}` : '')
   els.empty.querySelector('.choices')?.remove()
   const list = document.createElement('div')
   list.className = 'choices'
